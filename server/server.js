@@ -15,7 +15,7 @@ const crypto = require('crypto');
 
 const ROOT        = path.join(__dirname, '..');
 const DB_PATH     = process.env.TMS_DB_PATH || path.join(ROOT, 'tms.db');
-const UPLOADS_DIR = path.join(ROOT, 'uploads');
+const UPLOADS_DIR = path.resolve(process.env.TMS_UPLOADS_DIR || path.join(ROOT, 'uploads'));
 const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -550,10 +550,13 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
   res.json({ path: `/uploads/${req.file.filename}` });
 });
 
+// Stored paths are URLs (`/uploads/<file>`); map them onto UPLOADS_DIR,
+// which may live outside ROOT (e.g. a Docker volume).
 function deleteUpload(relPath) {
-  const clean = String(relPath).replace(/^\/+/, '');
-  const abs = path.resolve(ROOT, clean);
-  if (!abs.startsWith(UPLOADS_DIR)) return;  // guard against traversal
+  const match = /^\/*uploads\/(.+)$/.exec(String(relPath));
+  if (!match) return;
+  const abs = path.resolve(UPLOADS_DIR, match[1]);
+  if (!abs.startsWith(UPLOADS_DIR + path.sep)) return;  // guard against traversal
   fs.promises.unlink(abs).catch(() => {});
 }
 
@@ -569,6 +572,15 @@ if (require.main === module) {
     console.log(`Database   → ${DB_PATH}`);
     console.log(`Uploads    → ${UPLOADS_DIR}`);
   });
+
+  // PID 1 in a container ignores SIGTERM by default; handle it so `docker stop`
+  // is instant and SQLite checkpoints the WAL into tms.db before exit.
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      db.close();
+      process.exit(0);
+    });
+  }
 }
 
 module.exports = { app, db, computeCapState };
