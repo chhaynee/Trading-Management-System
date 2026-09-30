@@ -1,0 +1,29 @@
+# Development stack: live editing against its own throwaway database, so it can
+# run next to production without touching your real data.
+#   make up                 (or, without make: docker compose -f compose.dev.yaml up -d --build)
+#
+# The repo is bind-mounted over /app: frontend edits show up on browser refresh,
+# and edits to server/server.js restart the server (node --watch).
+name: tms-dev
+
+services:
+  app:
+    build:
+      context: .
+      target: dev
+      args:
+        NODE_VERSION: ${NODE_VERSION:-22}
+    image: tms:dev
+    init: true
+    ports:
+      - "${TMS_BIND:-127.0.0.1}:${TMS_DEV_PORT:-3001}:3000"
+    volumes:
+      - .:/app
+      - data:/data
+    tmpfs:
+      # Hide any host server/node_modules (e.g. one built on Windows, which won't
+      # load on Linux) so Node falls through to the image's /node_modules.
+      - /app/server/node_modules
+
+volumes:
+  data:

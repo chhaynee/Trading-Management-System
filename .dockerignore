@@ -1,0 +1,18 @@
+# The Dockerfile COPYs only what it needs; this keeps the build context small
+# and guarantees local data and secrets never end up in an image layer.
+**/node_modules
+.git
+.env
+.env.*
+tms.db*
+uploads
+backups
+docs
+.claude
+.superpowers
+*.md
+*.pdf
+Dockerfile
+.dockerignore
+compose*.yaml
+Makefile

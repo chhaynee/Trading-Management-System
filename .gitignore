@@ -11,3 +11,5 @@ docs/
 Adaptive_Flow_Checklist.pdf
 gold_risk_analysis.html
 test-grading.html
+.env
+backups/

@@ -1,0 +1,7 @@
+# Files run by Linux containers or make must keep LF line endings, even in a
+# Windows checkout with core.autocrlf=true (a CRLF shebang fails to execute).
+*.sh          text eol=lf
+Makefile      text eol=lf
+Dockerfile    text eol=lf
+*.yaml        text eol=lf
+.env.example  text eol=lf

@@ -1,0 +1,38 @@
+# Production stack: the everyday way to run TMS.
+#   make up-prod            (or, without make: docker compose up -d --build)
+#
+# Your data (tms.db + uploads/) lives in the `data` volume, mounted at /data.
+# Back it up with `make backup-prod`.
+name: tms
+
+services:
+  app:
+    build:
+      context: .
+      target: prod
+      args:
+        NODE_VERSION: ${NODE_VERSION:-22}
+    image: tms:latest
+    init: true
+    restart: unless-stopped
+    ports:
+      # Loopback only by default: TMS has no login. Set TMS_BIND=0.0.0.0 in .env
+      # to reach it from other devices on a network you trust.
+      - "${TMS_BIND:-127.0.0.1}:${TMS_PORT:-3000}:3000"
+    volumes:
+      - data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  data:
