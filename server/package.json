@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --require ../tests/helpers/sqlite-hook.cjs --test ../tests/"
+    "test": "node --test ../tests/*.test.mjs",
+    "test:wsl": "node --require ../tests/helpers/sqlite-hook.cjs --test ../tests/*.test.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

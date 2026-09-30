@@ -13,7 +13,10 @@
  *   cp server/package.json /tmp/tms-server-linux/
  *   cd /tmp/tms-server-linux && npm install
  *
- * Usage: node --require ./tests/helpers/sqlite-hook.cjs --test ../tests/
+ * Only needed for that WSL + Windows-drive setup; Docker and native installs
+ * use plain `npm test`.
+ *
+ * Usage: cd server && npm run test:wsl
  */
 
 const Module = require('module');
