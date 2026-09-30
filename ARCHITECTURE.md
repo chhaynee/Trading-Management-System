@@ -11,11 +11,11 @@ For setup instructions, see [README.md](README.md). For contribution workflow, s
 TMS is a **single-page application** with two interchangeable storage backends:
 
 ```
-[Local server mode]
+[Local server mode]  (normally inside the Docker container — see "Runtime & deployment")
 Browser ──► localhost:3000  (Express)
               ├── static → index.html + css/ + js/
-              ├── /uploads/* → screenshot files
-              └── /api/* → SQLite via better-sqlite3
+              ├── /uploads/* → screenshot files      (TMS_UPLOADS_DIR)
+              └── /api/* → SQLite via better-sqlite3  (TMS_DB_PATH)
 
 [Browser-only mode] (e.g. GitHub Pages, static hosts)
 Browser ──► static host
@@ -39,6 +39,7 @@ The result is cached in `sessionStorage['tms-mode']`. Page modules never know wh
 | Routing | Hand-rolled hash router (`js/router.js`) | Works on static hosts, no server config needed |
 | Charts | Hand-rolled SVG | No chart library dependency, full styling control |
 | Server | Express + `better-sqlite3` + `multer` | Synchronous SQLite is fast and simple for single-user use |
+| Runtime / packaging | Docker + Compose, driven by a `Makefile` | Identical setup on Windows/macOS/Linux; no host Node.js or C++ toolchain; data isolated in a volume |
 | Storage (browser-only) | IndexedDB via `js/db-idb.js` | Survives reloads, holds binary screenshots as Blobs |
 | Active account / calculator state | `localStorage` | Per-device preference, not user data |
 
@@ -50,9 +51,18 @@ The project deliberately avoids: TypeScript, React, Vite/Webpack, chart librarie
 
 ```
 index.html                  # Frontend shell — pages mount into <section data-page="...">
-tms.db                      # SQLite database (server-mode only, gitignored)
-uploads/                    # Screenshot storage (server-mode only, gitignored)
+tms.db                      # SQLite database (non-Docker server mode only, gitignored)
+uploads/                    # Screenshot storage (non-Docker server mode only, gitignored)
 pages/                      # Archived single-page references (HTML)
+
+Dockerfile                  # Multi-stage image: deps → app → dev | prod (default)
+compose.yaml                # Production stack (project `tms`, port 3000, volume tms_data)
+compose.dev.yaml            # Development stack (project `tms-dev`, port 3001, repo bind-mounted)
+Makefile                    # `make help` — up/down/build/logs/backup/... for either stack
+.env.example                # Optional overrides (ENV, ports, bind address, Node version)
+docker/
+  backup.sh                 # → /usr/local/bin/tms-backup: streams tms.db + uploads/ as .tar.gz
+  restore.sh                # → /usr/local/bin/tms-restore: validates, then swaps in an archive
 
 css/
   base.css                  # Reset, variables, typography
@@ -96,6 +106,47 @@ server/
   schema.sql                # Table definitions (auto-applied on boot)
   server.js                 # Express app — serves frontend + /api + /uploads
 ```
+
+---
+
+## Runtime & deployment (Docker)
+
+Docker is the primary way to run the server. Everything the Makefile does is a thin wrapper over `docker compose -f <file>`; `make -n <target>` prints the exact commands.
+
+**Image stages** (`Dockerfile`):
+
+| Stage | Contents |
+|-------|----------|
+| `deps` | `npm ci`/`npm install --omit=dev` with a compiler toolchain as fallback (better-sqlite3 normally uses a prebuilt binary for Node 22) |
+| `app` | `node_modules` at **`/node_modules`**, code at `/app` (root-owned, read-only to the app), runs as `node`, HEALTHCHECK on `HEAD /api/accounts` |
+| `dev` | `app` + `tests/`, `NODE_ENV=development`, `node --watch server.js` |
+| `prod` | `app` + `NODE_ENV=production`, `node server.js` — the default build target |
+
+Dependencies live at `/node_modules` (outside `/app`) so the dev stack can bind-mount the repo over `/app` without hiding them; Node finds them by walking up parent directories. The dev stack also lays an empty tmpfs over `/app/server/node_modules` so a host copy (e.g. a Windows-built `better-sqlite3`) can't shadow the image's.
+
+**Configuration** (read by `server/server.js`):
+
+| Env var | Default (no Docker) | In the image |
+|---------|---------------------|--------------|
+| `PORT` | `3000` | `3000` (published on the host as `TMS_PORT` / `TMS_DEV_PORT`) |
+| `TMS_DB_PATH` | `<repo>/tms.db` | `/data/tms.db` |
+| `TMS_UPLOADS_DIR` | `<repo>/uploads` | `/data/uploads` |
+
+`/data` is a named volume per stack (`tms_data`, `tms-dev_data`). Screenshot paths stored in the database stay `/uploads/<file>` URLs in every mode; the server maps them onto `TMS_UPLOADS_DIR`.
+
+**Stacks:**
+
+| | dev (`compose.dev.yaml`) | prod (`compose.yaml`) |
+|---|---|---|
+| Host port | `127.0.0.1:3001` | `127.0.0.1:3000` |
+| Code | repo bind-mounted at `/app` (live edits) | baked into the image |
+| Hardening | — | `read_only` root FS + tmpfs `/tmp`, `cap_drop: ALL`, `no-new-privileges`, `restart: unless-stopped`, rotated logs |
+
+Both publish on loopback only (`TMS_BIND`, default `127.0.0.1`), because there's no authentication — and Docker's port publishing bypasses host firewalls such as ufw.
+
+**Lifecycle:** `init: true` runs tini as PID 1 and the server closes SQLite on `SIGTERM`/`SIGINT`, so `docker stop` is immediate and the WAL is checkpointed into `tms.db`. Schema migrations run on every boot (see [Database schema](#database-schema)), so `make update` is just backup → `git pull` → rebuild → restart.
+
+**Backups:** `tms-backup` takes a consistent snapshot with `VACUUM INTO` (safe while the app is writing) and streams `tms.db` + `uploads/` as a tarball on stdout; `tms-restore` reads one on stdin, unpacks it beside the live data, checks that it contains a real SQLite `tms.db`, and only then swaps it in. The archive layout matches a non-Docker install, which is how `make import-legacy` migrates an old `tms.db` + `uploads/` folder.
 
 ---
 
@@ -181,7 +232,7 @@ Registered pages: `dashboard`, `accounts`, `strategies`, `journal`, `calendar`, 
 
 ## API (server mode only)
 
-All mounted under `/api` on `localhost:3000`.
+All mounted under `/api` on `localhost:3000` (`3001` for the dev stack).
 
 | Method | Path | Purpose |
 |--------|------|---------|

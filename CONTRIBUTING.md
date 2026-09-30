@@ -17,15 +17,18 @@ If you haven't yet, read [ARCHITECTURE.md](ARCHITECTURE.md) first — most of TM
 
 ## Setting up a dev environment
 
-Follow the **Quick start** section of the [README](README.md) to install Git + Node and clone the repo. Then:
+Follow the **Quick start** section of the [README](README.md) to install Docker, Git and make, and clone the repo. Then:
 
 ```bash
-cd server
-npm install
-npm run dev          # node --watch — auto-restarts on save
+make up              # dev stack: builds the image, starts it, waits until healthy
+make logs            # follow the server output (Ctrl+C stops following, not the app)
 ```
 
-Open http://localhost:3000. Edit any `.js`/`.css` file; refresh to see changes.
+Open http://localhost:3001. The repo is bind-mounted into the container: edit any `.js`/`.css` file and refresh to see changes; edits to `server/server.js` restart the server automatically (`node --watch`).
+
+The dev stack has its **own database volume**, separate from the production one on port 3000, so you can break things freely — and run both at once. `make help` lists everything else (`make shell`, `make destroy` to reset dev data, `make restore FILE=…` to load a prod backup into dev, …).
+
+Prefer no Docker? `cd server && npm install && npm run dev` still works (http://localhost:3000); see *Running without Docker* in the README.
 
 For browser-only mode testing, see [Testing your changes](#testing-your-changes) below.
 
@@ -144,16 +147,21 @@ If you add a dropdown inside a modal or a card with `overflow: hidden` / `backdr
 
 ## Testing your changes
 
-We don't have a full test harness yet (a contribution opportunity, see [#wishlist](#wishlist)). Until then, here's the manual matrix.
+### Automated tests
+
+```bash
+make test            # runs tests/*.test.mjs (node:test) in a throwaway dev container
+```
+
+Without Docker: `cd server && npm test`. The suite covers the server API and schema; the UI is still tested by hand with the matrix below (a fuller harness is a contribution opportunity, see [#wishlist](#wishlist)).
 
 ### Smoke test in server mode
 
 ```bash
-cd server
-npm start
+make up
 ```
 
-Open http://localhost:3000 and verify:
+Open http://localhost:3001 and verify:
 - Page you changed renders without console errors
 - A round-trip works: create → reload → edit → reload → delete
 
@@ -177,7 +185,7 @@ location.reload();
 
 - Resize the browser to mobile width (≤480px). Sidebar drawer + main UI both usable?
 - Hard-refresh (Ctrl+Shift+R) and re-test. Catches caching weirdness with the modal/modal-state.
-- Open `tms.db` in a SQLite viewer after server-mode changes. Did rows update as expected? Any orphaned screenshots in `uploads/`?
+- Inspect the database after server-mode changes: `make backup` and open the `tms.db` inside the archive in a SQLite viewer (see *Inspecting the database* in the README). Did rows update as expected? Any orphaned screenshots? (`make shell`, then `ls /data/uploads`)
 
 ---
 
