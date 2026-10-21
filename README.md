@@ -38,7 +38,7 @@ The same UI works in every mode. A previously connected server becoming unavaila
 
 The shared header shows the active account, storage location, save state, and last in-app backup time. The selected account is the default for new trade entries; each page's filters independently control which records are displayed. Account aliases are optional and never replace the original name or account number.
 
-On phones, **View options & backups** and **Filters & sorting** expand when needed. Journal tables become stacked trade cards. Trade forms keep their save buttons visible in portrait and landscape, and optional screenshots/notes are collapsible. Unsaved journal drafts stay in the same browser until a successful save; they are not yet part of the saved database or its backup.
+On phones, **View options** and **Filters & sorting** expand when needed. Backup and import actions are available only through **Data** in the navigation. Journal tables become stacked trade cards. Trade forms keep their save buttons visible in portrait and landscape, and optional screenshots/notes are collapsible. Unsaved journal drafts stay in the same browser until a successful save; they are not yet part of the saved database or its backup.
 
 ---
 

@@ -1,6 +1,6 @@
 import { data, subscribe, setActiveAccount, loadAll } from './store.js';
 import { getMode } from './db.js';
-import { el, accountLabel, confirmDialog, toast } from './utils.js';
+import { el, accountLabel, confirmDialog } from './utils.js';
 import { storageStatus, subscribeStorageStatus, updateStorageStatus } from './storage-status.js';
 
 let accountControl;
@@ -9,23 +9,6 @@ let storageState;
 let summary;
 let backupState;
 let accountSignature = '';
-
-async function backUp(button) {
-  button.disabled = true;
-  const old = button.textContent;
-  button.textContent = 'Preparing backup…';
-  try {
-    const { downloadBackup } = await import('./backup.js');
-    await downloadBackup();
-    toast('Complete backup downloaded, including screenshots.', 'success');
-    await refreshBackupStatus();
-  } catch (error) {
-    toast('Backup failed: ' + error.message, 'error');
-  } finally {
-    button.disabled = false;
-    button.textContent = old;
-  }
-}
 
 export async function chooseBrowserCopy() {
   if (!await confirmDialog({ title: 'Open the separate browser workspace?', message: 'This browser has its own data. Your saved workspace stays untouched, and records are not automatically synchronized.', confirmLabel: 'Open browser copy' })) return;
@@ -101,13 +84,10 @@ export function initWorkspace() {
       window.dispatchEvent(new Event('tms-view-preferences'));
     });
   }
-  const backupButton = el('button', { class: 'btn btn-primary' }, 'Back up');
-  backupButton.addEventListener('click', () => backUp(backupButton));
   const phone = window.matchMedia('(max-width: 640px)');
   const tools = el('details', { class: 'workspace-tools', 'data-responsive-details': '', open: !phone.matches },
-    el('summary', {}, 'View options & backups'),
-    el('div', { class: 'workspace-actions' }, focus, density, backupButton,
-      el('button', { class: 'btn btn-ghost', onClick: async () => { const { openDataManager } = await import('./data-manager.js'); openDataManager(); } }, 'Data & backups')),
+    el('summary', {}, 'View options'),
+    el('div', { class: 'workspace-actions' }, focus, density),
   );
   phone.addEventListener('change', event => document.querySelectorAll('[data-responsive-details]').forEach(details => { details.open = !event.matches; }));
   bar.replaceChildren(
