@@ -1,6 +1,6 @@
 # Trading Management System (TMS)
 
-A free, **dark-themed desktop dashboard** for traders who want a single home for their **accounts, strategies, journal, and pre-trade checklists** — no subscriptions, no cloud, your data stays on your computer.
+A free, **responsive trading dashboard** for desktop and smartphone screens, with a single home for your **accounts, strategies, journal, and pre-trade checklists** — no subscriptions, no cloud, your data stays on your computer.
 
 Built with plain HTML/CSS/JavaScript and an optional tiny local server, packaged to run in Docker. No frontend build step, no framework, no telemetry.
 
@@ -18,6 +18,9 @@ Built with plain HTML/CSS/JavaScript and an optional tiny local server, packaged
 - **Trade calendar** — see your wins/losses day by day
 - **Risk calculator** — quick position-size math
 - **Works offline** — your data is yours, stored locally (SQLite file or browser IndexedDB)
+- **Review trades quickly** — searchable Table/Gallery views, account and date filters, sorting, and clear filtered counts
+- **Safer daily workflows** — visible storage/save status, browser-local trade drafts, account aliases, and complete backups with import previews
+- **Adjust your workspace** — Focus removes background effects; Compact changes density without shrinking phone touch targets
 
 ---
 
@@ -27,9 +30,15 @@ Built with plain HTML/CSS/JavaScript and an optional tiny local server, packaged
 |------|-------------|------|------|
 | **Docker (recommended)** | Install Docker, run `make up-prod` | Same steps on Windows, macOS and Linux. No Node.js or C++ build tools. Restarts itself after a reboot. One-command backups. | Docker needs a few GB of disk |
 | **Node.js directly** | Install Node.js, run `npm start` | No Docker needed | You need Node.js plus C++ build tools for the database library |
-| **Browser-only** | Open the static site (no install) — e.g. host it on GitHub Pages | Zero install | Data lives **inside your browser**. Wipe the browser, lose the data. Use the in-app **Export** button often. |
+| **Browser-only** | Open the static site (no install) — e.g. host it on GitHub Pages | Zero install | Data lives **inside your browser**. Wipe the browser, lose the data. Use **Data & backups → Download complete backup** often. |
 
-The same UI works in every mode — the app auto-detects whether a server is behind it.
+The same UI works in every mode. A previously connected server becoming unavailable shows a warning instead of silently opening a different browser database. **Open browser copy** is an explicit choice: that copy is separate, not automatically synchronized.
+
+### Daily workspace controls
+
+The shared header shows the active account, storage location, save state, and last in-app backup time. The selected account is the default for new trade entries; each page's filters independently control which records are displayed. Account aliases are optional and never replace the original name or account number.
+
+On phones, **View options & backups** and **Filters & sorting** expand when needed. Journal tables become stacked trade cards. Trade forms keep their save buttons visible in portrait and landscape, and optional screenshots/notes are collapsible. Unsaved journal drafts stay in the same browser until a successful save; they are not yet part of the saved database or its backup.
 
 ---
 
@@ -145,9 +154,11 @@ There are two separate stacks, and they can run at the same time:
 | | `make up` (development) | `make up-prod` (production) |
 |---|---|---|
 | URL | http://localhost:3001 | http://localhost:3000 |
-| Data | its own throwaway volume (`tms-dev_data`) | your real data (`tms_data`) |
+| Data | separate persistent volume (`tms-dev_data`) | separate persistent volume (`tms_data`) |
 | Code | live from your checkout — refresh the browser for frontend edits; `server.js` edits restart the server | baked into the image; `make up-prod` rebuilds it when the code changed |
 | Extras | test suite (`make test`) | read-only filesystem, non-root user, auto-restart, capped log files |
+
+**Back up the stack you actually use.** Both volumes can contain important data. Switching between ports 3001 and 3000 does not move or merge records, and copying the source folder alone does not copy either Docker volume.
 
 ---
 
@@ -162,12 +173,15 @@ There are two separate stacks, and they can run at the same time:
 
 ### Backing up
 
+- **Every mode, from the app:** **Data & backups → Download complete backup** creates a version 2 JSON file containing all five data stores and every stored screenshot, including unused images. This portable file can move between Docker, Node.js, and browser storage.
+- **Import from the app:** select that JSON file and review the counts before confirming. **Merge** is the default: it adds new records and blocks differing records with the same ID. **Replace** explicitly replaces database records. Both modes first retain a recovery snapshot and never overwrite an existing screenshot with different content. A stale preview must be refreshed before importing.
+- **Recovery snapshots:** server snapshots are beside the database in `tms.db.backups/before-import-*` and contain `tms.db` plus `uploads/`. Browser snapshots are in a separate IndexedDB database, `tms-recovery-backups`; clearing browser storage can remove them too, so keep downloaded backups off-device.
 - **Docker:** `make backup-prod` → `backups/tms-prod-<date>-<time>.tar.gz`. Safe to run while the app is in use. Copy the `backups/` folder somewhere safe (Dropbox, USB stick, external drive).
 - **Restore:** `make restore-prod FILE=backups/tms-prod-….tar.gz` — asks first, and backs up the current data before replacing it.
-- **Node.js mode:** copy `tms.db` and the `uploads/` folder somewhere safe.
-- **Browser-only mode:** open the app → **Data** → **Export** → save the JSON file. Do this regularly — clearing your browser data **will delete everything**. **Import** restores it.
+- **Node.js mode:** use the complete in-app backup while running, or stop the server before copying the database and uploads. Do not copy only a live `tms.db` while SQLite has uncheckpointed `tms.db-wal` data.
+- **Browser-only mode:** download backups regularly — clearing browser data can delete saved records and unsaved drafts.
 
-A backup archive contains `tms.db` + `uploads/` — the same layout as a Node.js install, so it works outside Docker too.
+A command-line `.tar.gz` backup contains `tms.db` + `uploads/`; restore it with the command-line tools. The in-app importer accepts complete version 2 JSON backups, not `.tar.gz` archives or legacy incomplete JSON exports.
 
 ### Moving over from the old (pre-Docker) setup
 

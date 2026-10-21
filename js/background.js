@@ -55,10 +55,11 @@ export function initBackground() {
   }
 
   const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-  if (!mq.matches) start();
-  mq.addEventListener('change', e => {
-    if (e.matches) cancelAnimationFrame(raf);
-    else start();
-  });
-  window.addEventListener('resize', () => { if (!mq.matches) start(); });
+  const enabled = () => !mq.matches && !document.hidden && !document.body.classList.contains('focus-mode');
+  const sync = () => { if (enabled()) start(); else cancelAnimationFrame(raf); };
+  sync();
+  mq.addEventListener('change', sync);
+  window.addEventListener('tms-view-preferences', sync);
+  document.addEventListener('visibilitychange', sync);
+  window.addEventListener('resize', () => { if (enabled()) start(); });
 }

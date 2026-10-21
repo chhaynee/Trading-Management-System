@@ -18,9 +18,10 @@ import { renderJournalPage, openJournalForm } from './journal.js';
 import { renderCalendarPage } from './calendar.js';
 import { renderDoctrineChecklistPage } from './doctrine.js';
 import { renderSniperPage } from './sniper.js';
-import { el, fmtMoney, fmtPct, ACCOUNT_TYPES, initials } from './utils.js';
-import { db, uid, init as initDb, getMode } from './db.js';
+import { el, fmtMoney, fmtPct, ACCOUNT_TYPES, initials, accountLabel } from './utils.js';
+import { init as initDb, getMode } from './db.js';
 import { openDataManager } from './data-manager.js';
+import { initWorkspace, showConnectionError } from './workspace.js';
 
 // Expose inline handlers (calculator uses onclick in JSX-free HTML)
 window.setTrades   = setTrades;
@@ -61,7 +62,7 @@ function renderSidebar() {
     return;
   }
   const type = ACCOUNT_TYPES[active.type] || ACCOUNT_TYPES['own-funds'];
-  nameEl.textContent = active.name;
+  nameEl.textContent = accountLabel(active);
   nameEl.style.color = type.fg;
   balEl.textContent = fmtMoney(active.capital || 0, { dp: 0 });
   const pnl = (active.capital || 0) - (active.startingCapital || 0);
@@ -87,9 +88,25 @@ function updateAddButton() {
 }
 
 function closeMobileSidebar() {
-  document.getElementById('app-sidebar')?.classList.remove('open');
+  const sidebar = document.getElementById('app-sidebar');
+  const returnFocus = sidebar?.contains(document.activeElement);
+  sidebar?.classList.remove('open');
   document.getElementById('sidebar-backdrop')?.classList.remove('open');
   document.getElementById('mobile-menu-btn')?.setAttribute('aria-expanded', 'false');
+  syncMobileSidebar();
+  if (returnFocus && matchMedia('(max-width: 860px)').matches) document.getElementById('mobile-menu-btn')?.focus();
+}
+
+function syncMobileSidebar() {
+  const sidebar = document.getElementById('app-sidebar');
+  const mobile = matchMedia('(max-width: 860px)').matches;
+  const open = mobile && sidebar.classList.contains('open');
+  sidebar.inert = mobile && !open;
+  if (mobile && !open) sidebar.setAttribute('aria-hidden', 'true');
+  else sidebar.removeAttribute('aria-hidden');
+  document.querySelector('.app-main').inert = open;
+  document.getElementById('mobile-menu-btn').setAttribute('aria-expanded', String(open));
+  document.getElementById('sidebar-backdrop').classList.toggle('open', open);
 }
 
 function onAddClick() {
@@ -143,106 +160,9 @@ function syncCalcWithActiveAccount() {
   renderCalcMeta();
 }
 
-// Reconstruct startingCapital for accounts that were saved without one.
-// Runs every boot; only touches accounts where startingCapital <= 0.
-// startingCapital = currentCapital - sum(journal deltas for this account)
-async function backfillStartingCapital() {
-  try {
-    const accs = await db.getAll('accounts');
-    const journals = await db.getAll('journals');
-    const deltaFor = (id) => journals
-      .filter(j => j.accountId === id)
-      .reduce((sum, j) => {
-        const amt = Math.abs(parseFloat(j.amount) || 0);
-        if (j.result === 'win')  return sum + amt;
-        if (j.result === 'loss') return sum - amt;
-        return sum;
-      }, 0);
-    for (const a of accs) {
-      const starting = parseFloat(a.startingCapital) || 0;
-      const capital = parseFloat(a.capital) || 0;
-      if (starting > 0 || capital <= 0) continue;
-      const reconstructed = capital - deltaFor(a.id);
-      const fixed = reconstructed > 0 ? reconstructed : capital;
-      await db.put('accounts', { ...a, startingCapital: fixed });
-    }
-  } catch {}
-}
-
-// ── One-time cleanup migration ──────────────────────────
-// Earlier builds seeded sample strategies + journals. Wipe those for any
-// existing user so "Attached strategies" and the journals list start clean.
-async function cleanupSeededSamples() {
-  if (localStorage.getItem('tms-cleaned-seeds-v1')) return;
-  const SEEDED_STRATS = new Set(['London OB Retracement', 'NY FVG Fill', 'HTF CHoCH Reversal']);
-  try {
-    const strats = await db.getAll('strategies');
-    const staleIds = new Set(strats.filter(s => SEEDED_STRATS.has(s.name)).map(s => s.id));
-    if (staleIds.size) {
-      for (const id of staleIds) await db.del('strategies', id);
-      const bts = await db.getAll('journals');
-      for (const b of bts) {
-        const ids = (Array.isArray(b.strategyIds) && b.strategyIds.length)
-          ? b.strategyIds
-          : (b.strategyId ? [b.strategyId] : []);
-        const remaining = ids.filter(id => !staleIds.has(id));
-        if (!ids.length || remaining.length === ids.length) continue;
-        if (!remaining.length) {
-          await db.del('journals', b.id);
-        } else {
-          await db.put('journals', { ...b, strategyIds: remaining, strategyId: remaining[0] });
-        }
-      }
-      const accs = await db.getAll('accounts');
-      for (const a of accs) {
-        if (Array.isArray(a.strategyIds) && a.strategyIds.some(id => staleIds.has(id))) {
-          a.strategyIds = a.strategyIds.filter(id => !staleIds.has(id));
-          await db.put('accounts', a);
-        }
-      }
-    }
-  } catch {}
-  localStorage.setItem('tms-cleaned-seeds-v1', '1');
-}
-
-// ── Seed demo data ──────────────────────────────────────
-async function seedIfEmpty() {
-  if (data.accounts.length || data.strategies.length || data.journals.length) return;
-
-  // Seed a few demo accounts only (no strategies, no journals).
-  // The user will attach their own strategies as they create them.
-  const acc1 = { id: uid(), name: 'FTMO 100K — Phase 1', type: 'prop-challenge',
-    company: 'FTMO', accountNumber: '1520342', status: 'active',
-    startingCapital: 100000, capital: 103420,
-    tier: '100K', phase: 'phase1',
-    rules: { dailyLossPct: 5, maxLossPct: 10, targetPct: 8, maxLot: 10, maxRiskPct: 1 },
-    strategyIds: [],
-    createdAt: Date.now() - 8640000 * 9 };
-  const acc2 = { id: uid(), name: 'The Funded Trader — Instant 25K', type: 'prop-instant',
-    company: 'Funded Trader', accountNumber: '8831209', status: 'active',
-    startingCapital: 25000, capital: 25840,
-    rules: { dailyLossPct: 3, maxLossPct: 6, payoutSchedule: 'biweekly', payoutSplit: 90 },
-    strategyIds: [],
-    createdAt: Date.now() - 8640000 * 5 };
-  const acc3 = { id: uid(), name: 'Personal Portfolio', type: 'own-funds',
-    company: 'IC Markets', status: 'active',
-    startingCapital: 15000, capital: 16220,
-    riskAppetite: 'moderate',
-    rules: { dailyLossPct: 3 },
-    strategyIds: [],
-    createdAt: Date.now() - 8640000 * 3 };
-  const acc4 = { id: uid(), name: 'GoldPulse EA — Live', type: 'ea-robot',
-    company: 'Pepperstone', status: 'paused',
-    startingCapital: 5000, capital: 4720,
-    eaName: 'GoldPulse v2.3', broker: 'Pepperstone', vps: 'ForexVPS-London',
-    rules: { dailyLossPct: 5, maxLot: 0.5 },
-    strategyIds: [],
-    createdAt: Date.now() - 8640000 * 1 };
-  for (const a of [acc1, acc2, acc3, acc4]) await db.put('accounts', a);
-}
-
 // ── Boot ────────────────────────────────────────────────
 async function boot() {
+  initWorkspace();
   loadState();
   initTheme();
   initBackground();
@@ -279,32 +199,29 @@ async function boot() {
   const backdrop = document.getElementById('sidebar-backdrop');
   menuBtn?.addEventListener('click', () => {
     const isOpen = document.getElementById('app-sidebar').classList.toggle('open');
-    backdrop?.classList.toggle('open', isOpen);
-    menuBtn.setAttribute('aria-expanded', String(isOpen));
+    syncMobileSidebar();
+    if (isOpen) document.getElementById('sidebar-close')?.focus();
   });
   backdrop?.addEventListener('click', closeMobileSidebar);
-
-  // One-time cleanup for pre-fix visitors who got duplicate seed rows
-  if (!localStorage.getItem('tms-seed-v2')) {
-    try {
-      const req = indexedDB.deleteDatabase('tms-db');
-      await new Promise(res => { req.onsuccess = req.onerror = req.onblocked = res; });
-    } catch {}
-    localStorage.removeItem('tms-seeded');
-    localStorage.setItem('tms-seed-v2', '1');
-  }
+  const mobileSidebar = matchMedia('(max-width: 860px)');
+  mobileSidebar.addEventListener('change', closeMobileSidebar);
+  syncMobileSidebar();
+  document.addEventListener('keydown', event => {
+    const sidebar = document.getElementById('app-sidebar');
+    if (!mobileSidebar.matches || !sidebar.classList.contains('open') || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (event.key === 'Escape') { event.preventDefault(); closeMobileSidebar(); }
+    if (event.key !== 'Tab') return;
+    const items = [...sidebar.querySelectorAll('button:not(:disabled), [tabindex="0"]')].filter(node => node.getClientRects().length);
+    const first = items[0], last = items.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  });
 
   await initDb();
   console.log(`[tms] storage mode: ${getMode()}`);
   await loadAll();
-  await cleanupSeededSamples();
-  await backfillStartingCapital();
-  await loadAll();
-  if (!localStorage.getItem('tms-seeded') && !data.accounts.length && !data.strategies.length && !data.journals.length) {
-    await seedIfEmpty();
-    localStorage.setItem('tms-seeded', '1');
-    await loadAll();
-  }
+  // Loading a workspace never deletes, seeds, or rewrites trading records.
+  window.dispatchEvent(new Event('tms-data-ready'));
 
   // Subscribe — re-render whatever page is visible when data changes
   subscribe(() => {
@@ -332,4 +249,4 @@ async function boot() {
   window.addEventListener('hashchange', updateAddButton);
 }
 
-boot();
+boot().catch(error => showConnectionError(error.message));

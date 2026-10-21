@@ -3,17 +3,17 @@
  */
 
 import { data, strategyStats, setActiveAccount, journalStrategyIds, journalHasStrategy } from './store.js';
-import { el, ACCOUNT_TYPES, ACCOUNT_STATUSES, initials, fmtMoney, fmtPct, fmtDate, fmtRelative, iconSVG, sparkline, equityCurve, customSelect } from './utils.js';
+import { el, ACCOUNT_TYPES, ACCOUNT_STATUSES, initials, fmtMoney, fmtPct, fmtDate, iconSVG, sparkline, equityCurve, customSelect, accountLabel, makeCardAccessible } from './utils.js';
 import { dailyCapBand } from './daily-cap-band.js';
 import { go } from './router.js';
 import { openAccountForm } from './accounts.js';
 import { openStrategyForm } from './strategies.js';
 import { openJournalForm, openJournalDetail } from './journal.js';
 import { dashboardMiniCalendar } from './calendar.js';
-import { emptyState } from './accounts.js';
 import { pnlChartSection } from './pnl-chart.js';
+import { reviewTrades, reviewMetrics, signedPnl, entryTimestamp, periodRange } from './review-model.js';
 
-const dashFilters = { journalAccount: 'all' };
+const dashFilters = { journalAccount: 'all', metricAccount: 'active', metricPeriod: 'all' };
 
 export function renderDashboardPage() {
   const root = document.querySelector('[data-page="dashboard"]');
@@ -26,19 +26,21 @@ export function renderDashboardPage() {
       el('div', { class: 'page-eyebrow' }, 'Overview'),
       el('h1', { class: 'page-title' }, 'Dashboard'),
       el('p', { class: 'page-sub' }, active
-        ? `Active: ${active.name} · ${fmtMoney(active.capital || 0, { dp: 0 })}`
+        ? `Active: ${accountLabel(active)} · ${fmtMoney(active.capital || 0, { dp: 0 })} balance`
         : 'No active account — create one to get started.')
     ),
     el('div', { class: 'kpi-strip' },
       kpi(data.accounts.length,   'Accounts'),
       kpi(data.strategies.length, 'Strategies'),
-      kpi(data.journals.length,  'Journal entries'),
-      kpi(fmtMoney(totalCapital(), { dp: 0 }), 'Total prifit', 'gold')
+      kpi(data.journals.length,  'Journal entries')
     )
   ));
+  root.appendChild(performanceSummary());
+  const risk = active ? accountRisk(active) : null;
+  if (risk) root.appendChild(riskSummary(risk));
 
   // ── Daily cap band — hidden when active account is in safe state ──
-  const band = dailyCapBand(active);
+  const band = dailyCapBand(risk);
   if (band) root.appendChild(band);
 
   // ── Account strip ──
@@ -64,7 +66,7 @@ export function renderDashboardPage() {
   // ── Strategy performance grid ──
   const stratSection = el('section', { class: 'dash-section' },
     el('div', { class: 'dash-section-head' },
-      el('h2', {}, 'Strategy win rate'),
+      el('div', {}, el('h2', {}, 'Strategy win rate'), el('p', { class: 'metric-caption' }, 'All accounts · all time')),
       el('button', { class: 'btn btn-ghost btn-sm', onClick: () => openStrategyForm() },
         el('span', { html: iconSVG('plus') }), ' Add'
       )
@@ -146,10 +148,81 @@ function kpi(v, l, tone) {
   );
 }
 
-function totalCapital() {
-  return data.accounts
-    .filter(x => x.status === 'funded')
-    .reduce((a, x) => a + (parseFloat(x.capital) || 0), 0);
+function performanceSummary() {
+  const periods = [{ value: 'all', label: 'All time' }, { value: 'today', label: 'Today' }, { value: '7d', label: 'Last 7 days' }, { value: '30d', label: 'Last 30 days' }, { value: 'month', label: 'This month' }];
+  const accountOptions = [{ value: 'active', label: 'Active account' }, { value: 'all', label: 'All accounts' }, ...data.accounts.map(a => ({ value: a.id, label: accountLabel(a) }))];
+  const metrics = el('div', { class: 'dashboard-metrics', 'aria-live': 'polite' });
+  const caption = el('p', { class: 'metric-caption' });
+  function update() {
+    const account = dashFilters.metricAccount === 'active' ? data.activeAccountId : dashFilters.metricAccount;
+    const range = periodRange(dashFilters.metricPeriod);
+    const trades = reviewTrades(data.journals, { ...range, account: account || '__no_account__' });
+    const summary = reviewMetrics(trades);
+    const scope = account === 'all' ? 'All accounts' : account ? accountLabel(data.accounts.find(a => a.id === account)) : 'No active account selected';
+    const period = periods.find(option => option.value === dashFilters.metricPeriod)?.label || 'All time';
+    caption.textContent = `${scope} · ${period}${range.from ? ` (${fmtDate(new Date(`${range.from}T12:00:00`))} – ${fmtDate(new Date(`${range.to}T12:00:00`))})` : ''} · Closed trades only. These filters apply to the four metrics below.`;
+    const average = summary.averageR;
+    metrics.replaceChildren(
+      metricCard(fmtMoney(summary.pnl, { sign: true }), 'Closed-trade P&L', 'Sum of recorded trade amounts', summary.pnl > 0 ? 'pos' : summary.pnl < 0 ? 'neg' : ''),
+      metricCard(summary.winRate === null ? '—' : fmtPct(summary.winRate, 1), 'Win rate', `${summary.wins} wins · ${summary.losses} losses · ${summary.breakeven} breakeven excluded`),
+      metricCard(average === null ? '—' : `${average > 0 ? '+' : ''}${average.toFixed(2)}R`, 'Average signed R', `${summary.rCount} recorded/estimated R values · ${summary.assumedLosses} losses assumed −1R`, average > 0 ? 'pos' : average < 0 ? 'neg' : ''),
+      metricCard(summary.total, 'Closed trades', 'Wins, losses and breakeven')
+    );
+  }
+  const accountControl = customSelect(accountOptions, dashFilters.metricAccount, value => { dashFilters.metricAccount = value; update(); });
+  accountControl.setAttribute('aria-label', 'Performance account');
+  const periodControl = customSelect(periods, dashFilters.metricPeriod, value => { dashFilters.metricPeriod = value; update(); });
+  periodControl.setAttribute('aria-label', 'Performance period');
+  const section = el('section', { class: 'dash-section dashboard-summary', 'aria-label': 'Trading performance' },
+    el('div', { class: 'dash-section-head' }, el('h2', {}, 'Trading performance')),
+    el('div', { class: 'dashboard-controls' },
+      el('label', { class: 'filter-field' }, el('span', {}, 'Account'), accountControl),
+      el('label', { class: 'filter-field' }, el('span', {}, 'Period'), periodControl)
+    ), caption, metrics,
+    el('p', { class: 'metric-caption' }, 'R averages include breakeven as 0R and exclude wins with no R recorded. Losses with no R recorded use −1R. Open positions, fees and deposits are not included unless recorded in trade amounts.')
+  );
+  update();
+  return section;
+}
+
+function metricCard(value, label, caption, tone = '') {
+  return el('article', { class: 'kpi' }, el('div', { class: 'kpi-v ' + tone }, String(value)), el('div', { class: 'kpi-l' }, label), el('div', { class: 'metric-caption' }, caption));
+}
+
+function accountRisk(account) {
+  // Match the server's GMT+7 risk day and recalculate from current entries after each save.
+  const riskOffset = 7 * 60 * 60 * 1000;
+  const dayLength = 24 * 60 * 60 * 1000;
+  const dayStart = Math.floor((Date.now() + riskOffset) / dayLength) * dayLength - riskOffset;
+  const todayTrades = data.journals.filter(trade => trade.accountId === account.id && entryTimestamp(trade) >= dayStart && entryTimestamp(trade) < dayStart + dayLength);
+  const pnl = reviewMetrics(todayTrades).pnl;
+  const startingBalance = Number(account.startingCapital ?? account.capital) || 0;
+  const personalPct = Number(account.personalDailyCapPct) || 3;
+  const firmPct = Number(account.firmDailyCapPct) || 5;
+  const personalCap = startingBalance * personalPct / 100;
+  const firmCap = startingBalance * firmPct / 100;
+  const loss = Math.max(0, -pnl);
+  const personalUsed = personalCap ? loss / personalCap * 100 : 0;
+  const firmUsed = firmCap ? loss / firmCap * 100 : 0;
+  const capState = firmUsed >= 100 ? 'firm_breached' : personalUsed >= 100 ? 'personal_breached' : personalUsed >= 90 ? 'breach_imminent' : personalUsed >= 70 ? 'warning' : personalUsed >= 40 ? 'caution' : 'safe';
+  return { ...account, startingCapital: startingBalance, dailyPnlToday: pnl, personalDailyCapPct: personalPct, firmDailyCapPct: firmPct, personalCapDollars: -personalCap, firmCapDollars: -firmCap, personalCapPctUsed: personalUsed, firmCapPctUsed: firmUsed, capState };
+}
+
+function riskSummary(account) {
+  const pnl = account.dailyPnlToday;
+  const personalCap = Math.abs(account.personalCapDollars);
+  const firmCap = Math.abs(account.firmCapDollars);
+  const personalUsed = account.personalCapPctUsed;
+  const firmUsed = account.firmCapPctUsed;
+  const state = !account.startingCapital ? 'Risk limits unavailable: set a starting balance' : firmUsed >= 100 ? 'Firm daily cap reached' : personalUsed >= 100 ? 'Personal daily cap reached' : personalUsed >= 40 ? 'Approaching personal daily cap' : 'Within daily caps';
+  return el('section', { class: 'dashboard-risk-summary', 'aria-label': 'Active account daily risk' },
+    el('div', {}, el('h2', {}, 'Daily risk · active account'), el('p', { class: 'metric-caption' }, `${accountLabel(account)} · Today GMT+7 · Closed trades only; excludes open positions.`)),
+    el('div', { class: 'dashboard-risk-meta' },
+      miniStat('Today’s P&L', fmtMoney(pnl, { sign: true }), state),
+      miniStat('Personal daily cap', personalCap ? fmtMoney(personalCap) : '—', personalCap ? `${personalUsed.toFixed(0)}% used · ${account.personalDailyCapPct}% of starting balance` : 'Starting balance required'),
+      miniStat('Firm daily cap', firmCap ? fmtMoney(firmCap) : '—', firmCap ? `${firmUsed.toFixed(0)}% used · ${account.firmDailyCapPct}% of starting balance` : 'Starting balance required')
+    )
+  );
 }
 
 function accountStripCard(a) {
@@ -161,11 +234,11 @@ function accountStripCard(a) {
   const maxLoss = a.rules?.maxLossPct ? (a.startingCapital * a.rules.maxLossPct / 100) : null;
   const ddUsed = a.startingCapital && maxLoss ? Math.min(100, Math.max(0, Math.abs(Math.min(0, pnl)) / maxLoss * 100)) : 0;
 
-  return el('article', { class: 'strip-card status-' + (a.status || 'active') + (isActive ? ' is-active' : ''), onClick: () => go('accounts/' + a.id) },
+  return makeCardAccessible(el('article', { class: 'strip-card status-' + (a.status || 'active') + (isActive ? ' is-active' : ''), onClick: e => { if (!e.target.closest('button')) go('accounts/' + a.id); } },
     el('div', { class: 'strip-top' },
       el('div', { class: 'account-avatar', style: { background: type.bg, color: type.fg } }, initials(a.company || a.name)),
       el('div', { class: 'strip-top-meta' },
-        el('div', { class: 'strip-name' }, a.name),
+        el('div', { class: 'strip-name' }, accountLabel(a)),
         el('div', { class: 'strip-type', style: { color: type.fg } }, type.label)
       ),
       el('div', { class: 'strip-status', title: status.label + ' account' },
@@ -188,7 +261,7 @@ function accountStripCard(a) {
       : (a.status === 'passed' || a.status === 'blown')
         ? null
         : el('button', { class: 'strip-set-active', onClick: (e) => { e.stopPropagation(); setActiveAccount(a.id); } }, 'Set active')
-  );
+  ), () => go('accounts/' + a.id));
 }
 
 function winRateHue(winRate) {
@@ -199,14 +272,15 @@ function winRateHue(winRate) {
 function strategyMiniCard(s) {
   const st = strategyStats(s.id);
   const bts = data.journals.filter(b => journalHasStrategy(b, s.id));
+  const metrics = reviewMetrics(bts);
   const curve = equityCurve(bts);
 
-  const hasTrades = st.total > 0;
-  const accent = hasTrades ? `hsl(${winRateHue(st.winRate)}, 72%, 56%)` : '#94A3B8';
-  const tintBg = hasTrades ? `hsla(${winRateHue(st.winRate)}, 72%, 56%, 0.08)` : 'var(--surface)';
-  const tintBorder = hasTrades ? `hsla(${winRateHue(st.winRate)}, 72%, 56%, 0.35)` : 'var(--border)';
+  const hasTrades = metrics.winRate !== null;
+  const accent = hasTrades ? `hsl(${winRateHue(metrics.winRate)}, 72%, 56%)` : '#94A3B8';
+  const tintBg = hasTrades ? `hsla(${winRateHue(metrics.winRate)}, 72%, 56%, 0.08)` : 'var(--surface)';
+  const tintBorder = hasTrades ? `hsla(${winRateHue(metrics.winRate)}, 72%, 56%, 0.35)` : 'var(--border)';
 
-  return el('article', { class: 'strat-mini', onClick: () => go('strategies/' + s.id), style: {
+  return makeCardAccessible(el('article', { class: 'strat-mini', onClick: () => go('strategies/' + s.id), style: {
     '--c': accent,
     '--strat-bg': tintBg,
     '--strat-border': tintBorder,
@@ -214,24 +288,25 @@ function strategyMiniCard(s) {
     el('div', { class: 'strat-mini-head' },
       el('span', { class: 'color-swatch-sm', style: { background: s.color } }),
       el('div', { class: 'strat-mini-name' }, s.name),
-      el('span', { class: 'strat-mini-wr' }, st.total ? fmtPct(st.winRate, 0) : '—')
+      el('span', { class: 'strat-mini-wr' }, metrics.winRate !== null ? fmtPct(metrics.winRate, 0) : '—')
     ),
     el('div', { class: 'strat-mini-sub' },
-      el('span', {}, `${st.total} trades`),
-      el('span', {}, st.avgR ? st.avgR.toFixed(2) + 'R' : '—'),
+      el('span', {}, `${metrics.total} closed trades`),
+      el('span', {}, metrics.averageR !== null ? `${metrics.averageR > 0 ? '+' : ''}${metrics.averageR.toFixed(2)}R avg` : '—'),
       el('span', {}, st.profitFactor ? 'PF ' + st.profitFactor.toFixed(2) : '—')
     ),
     el('div', { class: 'strat-mini-spark' }, sparkline(curve, 240, 34, s.color))
-  );
+  ), () => go('strategies/' + s.id));
 }
 
 function journalHistorySection() {
-  const accountOptions = [{ value: 'all', label: 'All accounts' }, ...data.accounts.map(a => ({ value: a.id, label: a.name }))];
+  const accountOptions = [{ value: 'all', label: 'All accounts' }, ...data.accounts.map(a => ({ value: a.id, label: accountLabel(a) }))];
   const accountSelect = customSelect(accountOptions, dashFilters.journalAccount, (v) => { dashFilters.journalAccount = v; renderDashboardPage(); });
+  accountSelect.setAttribute('aria-label', 'Journal history account');
 
   const section = el('section', { class: 'dash-section' },
     el('div', { class: 'dash-section-head' },
-      el('h2', {}, 'Journal history'),
+      el('div', {}, el('h2', {}, 'Journal history'), el('p', { class: 'metric-caption' }, 'Latest 12 trades · all time · account filter also applies to calendar')),
       el('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
         accountSelect,
         el('button', { class: 'btn btn-ghost btn-sm', onClick: () => go('journal') }, 'View all'),
@@ -251,7 +326,7 @@ function journalHistorySection() {
 
   const recent = [...data.journals]
     .filter(b => dashFilters.journalAccount === 'all' || b.accountId === dashFilters.journalAccount)
-    .sort((a, b) => (b.entryDate || b.createdAt || 0) - (a.entryDate || a.createdAt || 0))
+    .sort((a, b) => entryTimestamp(b) - entryTimestamp(a))
     .slice(0, 12);
 
   if (!recent.length) {
@@ -272,14 +347,11 @@ function journalRow(b) {
     ? strategies.map(s => s.name).join(' + ')
     : 'No strategy';
   const a = data.accounts.find(x => x.id === b.accountId);
-  const amt = Math.abs(parseFloat(b.amount) || 0);
-  const pnl = b.result === 'win' ? amt : b.result === 'loss' ? -amt : 0;
-  const amtLabel = amt
-    ? (pnl > 0 ? '+' : pnl < 0 ? '-' : '') + fmtMoney(Math.abs(pnl), { dp: 0 })
-    : (b.rAchieved ? b.rAchieved + 'R' : '—');
+  const pnl = signedPnl(b);
+  const amtLabel = fmtMoney(pnl, { sign: true });
 
-  return el('div', { class: 'journal-row', onClick: () => openJournalDetail(b) },
-    el('div', { class: 'journal-thumb' + (b.screenshotPath ? '' : ' empty'), style: b.screenshotPath ? { backgroundImage: `url(${b.screenshotPath})` } : {} },
+  return makeCardAccessible(el('div', { class: 'journal-row', onClick: () => openJournalDetail(b) },
+    el('div', { class: 'journal-thumb' + (b.screenshotPath ? '' : ' empty'), style: b.screenshotPath ? { backgroundImage: `url(${b.screenshotPathUrl || b.screenshotPath})` } : {} },
       el('span', { class: 'journal-thumb-result ' + (b.result || 'be') }, (b.result || 'be').toUpperCase())
     ),
     el('div', { class: 'journal-body' },
@@ -288,7 +360,7 @@ function journalRow(b) {
         el('span', {}, stratLabel)
       ),
       el('div', { class: 'journal-s' },
-        el('span', {}, a ? a.name : 'Unassigned'),
+        el('span', {}, accountLabel(a)),
         el('span', { class: 'dot-sep' }, '·'),
         el('span', {}, b.instrument || '—'),
         el('span', { class: 'dot-sep' }, '·'),
@@ -298,6 +370,6 @@ function journalRow(b) {
       )
     ),
     el('div', { class: 'journal-pnl ' + (pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'be') }, amtLabel),
-    el('div', { class: 'journal-ts' }, fmtRelative(b.entryDate || b.createdAt))
-  );
+    el('div', { class: 'journal-ts' }, fmtDate(entryTimestamp(b)))
+  ), () => openJournalDetail(b));
 }

@@ -77,6 +77,7 @@ try {
 try {
   const cols = db.prepare('PRAGMA table_info(accounts)').all().map(c => c.name);
   const adds = [
+    ['display_name', 'TEXT'],
     ['starting_capital', 'REAL'],
     ['account_number',   'TEXT'],
     ['tier',             'TEXT'],
@@ -224,6 +225,7 @@ const MAPPERS = {
     toDb: a => ({
       id: a.id,
       name: a.name,
+      display_name: a.displayName ?? null,
       type: a.type,
       company: a.company ?? null,
       account_number: a.accountNumber ?? null,
@@ -246,6 +248,7 @@ const MAPPERS = {
     fromDb: r => ({
       id: r.id,
       name: r.name,
+      displayName: r.display_name ?? null,
       type: r.type,
       company: r.company,
       accountNumber: r.account_number,
@@ -436,6 +439,7 @@ const isStore = s => STORES.includes(s);
 // ── App ──────────────────────────────────────────────────
 const app = express();
 app.use(cors());
+app.use('/api/data', require('./data-transfer')({ db, DB_PATH, UPLOADS_DIR, MAPPERS }));
 app.use(express.json({ limit: '2mb' }));
 
 // Serve the frontend + uploaded screenshots

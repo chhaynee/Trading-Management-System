@@ -4,7 +4,7 @@
 
 import { data, saveAccount, deleteAccount, strategyById, setActiveAccount, journalStrategyIds } from './store.js';
 import { openFormPanel, field, textInput, numberInput, select, multiChips, toggleGroup, readForm } from './forms.js';
-import { el, ACCOUNT_TYPES, ACCOUNT_STATUSES, initials, fmtMoney, fmtPct, iconSVG, toast, sparkline } from './utils.js';
+import { el, ACCOUNT_TYPES, ACCOUNT_STATUSES, initials, fmtMoney, fmtPct, iconSVG, toast, sparkline, accountLabel, accountIdentity, makeCardAccessible } from './utils.js';
 import { go } from './router.js';
 import { openJournalForm, openJournalDetail } from './journal.js';
 
@@ -59,8 +59,8 @@ function accountCard(a) {
     el('div', { class: 'account-card-top' },
       el('div', { class: 'account-avatar', style: { background: type.bg, color: type.fg } }, initials(a.company || a.name)),
       el('div', { class: 'account-meta' },
-        el('div', { class: 'account-name' }, a.name || 'Untitled'),
-        el('div', { class: 'account-company' }, a.company || '—')
+        el('div', { class: 'account-name', title: a.name }, a.displayName || a.name || 'Untitled'),
+        el('div', { class: 'account-identifier' }, accountIdentity(a))
       ),
       el('div', { class: 'account-status', title: status.label },
         el('span', { class: 'status-dot', style: { background: status.color } }),
@@ -104,7 +104,7 @@ function accountCard(a) {
           : el('button', { class: 'btn btn-ghost btn-sm', onClick: () => { setActiveAccount(a.id); toast(`${a.name} set as active`); } }, 'Set active')
     )
   );
-  return card;
+  return makeCardAccessible(card, () => go('accounts/' + a.id));
 }
 
 export function openAccountForm(existing = null) {
@@ -202,6 +202,7 @@ export function openAccountForm(existing = null) {
 
   const body = el('div', {},
     field('Account name', textInput({ name: 'name', value: a.name || '', placeholder: 'e.g. FTMO 100K Phase 1', required: true })),
+    field('Short display name', textInput({ name: 'displayName', value: a.displayName || '', placeholder: 'e.g. Prime 2K — Challenge 1' }), 'Optional. Your original account name and number are kept.'),
     field('Account type', typeInput),
     row(
       field('Company / Broker', textInput({ name: 'company', value: a.company || '', placeholder: 'e.g. FTMO' })),
@@ -230,6 +231,7 @@ export function openAccountForm(existing = null) {
       const obj = {
         ...a,
         name: raw.name,
+        displayName: raw.displayName?.trim() || null,
         type: raw.type,
         company: raw.company,
         accountNumber: raw.accountNumber,
@@ -297,7 +299,7 @@ export function renderAccountDetail(id) {
       ),
       el('div', { class: 'strategy-detail-title' },
         el('span', { class: 'account-avatar', style: { background: type.bg, color: type.fg } }, initials(a.company || a.name)),
-        el('h1', { class: 'page-title' }, a.name || 'Untitled')
+        el('h1', { class: 'page-title', title: a.name }, a.displayName || a.name || 'Untitled')
       ),
       el('div', { class: 'chip-row', style: { marginTop: '10px' } },
         el('span', { class: 'mini-chip', style: { background: type.bg, color: type.fg, borderColor: type.fg + '55' } }, type.label),

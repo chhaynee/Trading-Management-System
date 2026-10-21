@@ -4,6 +4,7 @@
  */
 
 import { db, uid } from './db.js';
+import { updateStorageStatus } from './storage-status.js';
 
 export const data = {
   accounts:   [],
@@ -22,9 +23,13 @@ export async function loadAll() {
   // Each collection loads independently — a failure on the new trade_plans/checks
   // endpoints (e.g. older server without those routes) must NOT wipe the existing
   // accounts/strategies/journals from the UI.
+  const failures = [];
+  const fallback = { accounts: data.accounts, strategies: data.strategies, journals: data.journals, trade_plans: data.plans, checks: data.checks };
   const safe = (store) => db.getAll(store).catch(err => {
     console.warn(`[store] failed to load ${store}:`, err.message);
-    return [];
+    failures.push(store);
+    updateStorageStatus({ connected: false, state: 'offline', error: 'Could not load your saved data. Your existing records have been kept.' });
+    return fallback[store];
   });
   const [a, s, b, p, c] = await Promise.all([
     safe('accounts'),
@@ -38,8 +43,10 @@ export async function loadAll() {
   data.journals   = (b || []).sort((x,y) => (y.createdAt||0) - (x.createdAt||0));
   data.plans      = (p || []).sort((x,y) => (y.createdAt||0) - (x.createdAt||0));
   data.checks     = (c || []).sort((x,y) => (x.position||0) - (y.position||0));
-  data.activeAccountId = localStorage.getItem('tms-active-account') || (data.accounts[0]?.id || null);
+  const preferred = localStorage.getItem('tms-active-account');
+  data.activeAccountId = data.accounts.some(account => account.id === preferred) ? preferred : (data.accounts[0]?.id || null);
   notify('all');
+  if (failures.length) throw new Error('Some records could not be loaded. Retry your connection; saved data has not been removed.');
 }
 
 export function setActiveAccount(id) {

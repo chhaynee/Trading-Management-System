@@ -7,6 +7,7 @@ export function $$(sel, root = document) { return Array.from(root.querySelectorA
 
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
+  if (tag === 'button' && !attrs.type) node.type = 'button';
   for (const [k, v] of Object.entries(attrs || {})) {
     if (k === 'class')     node.className = v;
     else if (k === 'style') {
@@ -36,6 +37,27 @@ export function fmtMoney(n, opts = {}) {
   const abs = Math.abs(n);
   const sign = opts.sign && n > 0 ? '+' : (n < 0 ? '-' : '');
   return sign + '$' + abs.toLocaleString(undefined, { minimumFractionDigits: opts.dp ?? 0, maximumFractionDigits: opts.dp ?? 2 });
+}
+
+export function accountLabel(account) {
+  if (!account) return 'Unassigned';
+  return `${account.displayName || account.name || 'Untitled account'} · #${String(account.id || '').slice(-5)}`;
+}
+
+export function accountIdentity(account) {
+  return [account.company, account.phase, account.accountNumber ? `••${String(account.accountNumber).slice(-4)}` : null,
+    `ID ${String(account.id || '').slice(-5)}`].filter(Boolean).join(' · ');
+}
+
+export function makeCardAccessible(node, activate) {
+  node.tabIndex = 0;
+  node.setAttribute('role', 'button');
+  node.addEventListener('keydown', event => {
+    if (event.target !== node || !['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    activate();
+  });
+  return node;
 }
 
 export function fmtPct(n, dp = 1) {
@@ -137,6 +159,8 @@ export function toast(msg, kind = '') {
   if (!t) {
     t = document.createElement('div');
     t.className = 'toast';
+    t.setAttribute('role', 'status');
+    t.setAttribute('aria-live', 'polite');
     document.body.appendChild(t);
   }
   t.textContent = msg;
@@ -173,8 +197,9 @@ export function confirmDialog({
       }, 180);
     }
 
-    const titleEl   = el('h3', { class: 'cd-title' }, title);
-    const messageEl = message ? el('p', { class: 'cd-message' }, message) : null;
+    const titleId = 'confirm-' + Math.random().toString(36).slice(2);
+    const titleEl   = el('h3', { class: 'cd-title', id: titleId }, title);
+    const messageEl = message ? el('p', { class: 'cd-message', id: titleId + '-description' }, message) : null;
 
     const cancelBtn = el('button', { type: 'button', class: 'cd-btn cd-btn-ghost' }, cancelLabel);
     cancelBtn.addEventListener('click', () => settle(false));
@@ -189,6 +214,8 @@ export function confirmDialog({
       class: 'cd-panel',
       role: 'alertdialog',
       'aria-modal': 'true',
+      'aria-labelledby': titleId,
+      'aria-describedby': message ? titleId + '-description' : null,
     },
       titleEl,
       messageEl,
@@ -203,6 +230,10 @@ export function confirmDialog({
     document.body.style.overflow = 'hidden';
 
     const onKey = (e) => {
+      if (e.key === 'Tab') {
+        if (e.shiftKey && document.activeElement === cancelBtn) { e.preventDefault(); confirmBtn.focus(); }
+        else if (!e.shiftKey && document.activeElement === confirmBtn) { e.preventDefault(); cancelBtn.focus(); }
+      }
       if (e.key === 'Escape')    { e.preventDefault(); settle(false); }
       else if (e.key === 'Enter' && !danger) { e.preventDefault(); settle(true); }
     };
@@ -378,94 +409,12 @@ export function iconSVG(name) {
   return `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${icons[name] || ''}</svg>`;
 }
 
-const CHEVRON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
 export function customSelect(options, activeValue, onSelect) {
-  let open = false;
-  let currentValue = activeValue;
-  const activeOpt = options.find(o => o.value === activeValue) || options[0];
-
-  const labelText = el('span', { class: 'pnl-select-text' }, activeOpt.label);
-  const label = el('div', { class: 'pnl-select-label' },
-    labelText,
-    el('span', { class: 'pnl-select-arrow', html: CHEVRON_SVG })
+  const control = el('select', { class: 'pnl-select native-select', 'aria-label': 'Choose an option' },
+    ...options.map(option => el('option', { value: option.value }, option.label))
   );
-
-  // Dropdown list is portaled to document.body when opened, so it escapes any
-  // ancestor `overflow:hidden|auto` clip (e.g. the form modal's scrollable body)
-  // and any stacking-context trap.
-  const list = el('div', { class: 'pnl-select-list pnl-select-list--portal' });
-  const itemEls = new Map();
-  options.forEach(o => {
-    const item = el('div', {
-      class: 'pnl-select-item' + (o.value === activeValue ? ' active' : ''),
-      onClick: (e) => {
-        e.stopPropagation();
-        // Update visible label + active highlight before notifying the caller
-        currentValue = o.value;
-        labelText.textContent = o.label;
-        itemEls.forEach((node, val) => node.classList.toggle('active', val === o.value));
-        onSelect(o.value);
-        close();
-      },
-    }, o.label);
-    itemEls.set(o.value, item);
-    list.appendChild(item);
-  });
-
-  const wrap = el('div', { class: 'pnl-select', tabindex: '0' }, label);
-
-  function positionList() {
-    const r = label.getBoundingClientRect();
-    const vh = window.innerHeight;
-    const listHeight = Math.min(list.scrollHeight || 240, 240);
-    const spaceBelow = vh - r.bottom;
-    const openUp = spaceBelow < listHeight + 16 && r.top > listHeight + 16;
-    list.style.position = 'fixed';
-    list.style.left = r.left + 'px';
-    list.style.right = 'auto';                  // override base CSS `right: 0` stretch
-    list.style.minWidth = r.width + 'px';
-    list.style.width = 'max-content';
-    if (openUp) {
-      list.style.top = 'auto';
-      list.style.bottom = (vh - r.top + 4) + 'px';
-    } else {
-      list.style.bottom = 'auto';
-      list.style.top = (r.bottom + 4) + 'px';
-    }
-  }
-
-  function toggle() { open ? close() : openMenu(); }
-
-  function openMenu() {
-    if (open) return;
-    open = true;
-    wrap.classList.add('open');
-    document.body.appendChild(list);
-    positionList();
-    document.addEventListener('click', outsideClick, true);
-    window.addEventListener('scroll',  onViewportShift, true);
-    window.addEventListener('resize',  onViewportShift, true);
-  }
-  function close() {
-    if (!open) return;
-    open = false;
-    wrap.classList.remove('open');
-    if (list.parentNode) list.parentNode.removeChild(list);
-    document.removeEventListener('click', outsideClick, true);
-    window.removeEventListener('scroll',  onViewportShift, true);
-    window.removeEventListener('resize',  onViewportShift, true);
-  }
-  function outsideClick(e) {
-    if (!wrap.contains(e.target) && !list.contains(e.target)) close();
-  }
-  function onViewportShift() { if (open) positionList(); }
-
-  label.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
-  wrap.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') close();
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
-  });
-
-  return wrap;
+  control.value = String(activeValue ?? options[0]?.value ?? '');
+  control.addEventListener('change', () => onSelect(control.value));
+  control.setValue = value => { control.value = String(value ?? ''); };
+  return control;
 }

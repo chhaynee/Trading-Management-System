@@ -33,7 +33,7 @@ RUN --mount=type=cache,target=/root/.npm \
 # walking up parent directories, and the dev bind mount over /app can't hide them.
 FROM base AS app
 COPY --from=deps /app/server/node_modules /node_modules
-COPY server/package.json server/server.js server/schema.sql ./
+COPY server/package.json server/server.js server/schema.sql server/data-transfer.js ./
 COPY index.html favicon.svg /app/
 COPY css   /app/css
 COPY js    /app/js

@@ -2,6 +2,7 @@
 
 import { createAdapter } from './db-detect.js';
 import { enrichAccount, computeJournalGrade, validateSopChecks } from './compute.js';
+import { trackSave, updateStorageStatus } from './storage-status.js';
 
 let _adapter = null;
 let _mode = null;
@@ -10,6 +11,7 @@ export async function init() {
   const { adapter, mode } = await createAdapter();
   _adapter = adapter;
   _mode = mode;
+  updateStorageStatus({ mode, state: 'saved', connected: true, error: '' });
 }
 
 export function getMode() { return _mode; }
@@ -88,19 +90,19 @@ export const db = {
     } else if (_mode === 'idb' && store === 'journals' && !obj.sopChecks) {
       obj.preGrading = true;
     }
-    const saved = await _adapter.put(store, obj);
+    const saved = await trackSave(() => _adapter.put(store, obj));
     if (_mode === 'idb' && (store === 'journals' || store === 'plans')) {
       return resolveOneScreenshot(saved);
     }
     return saved;
   },
   async del(store, id) {
-    return _adapter.del(store, id);
+    return trackSave(() => _adapter.del(store, id));
   },
 };
 
 export async function uploadScreenshot(file) {
-  return _adapter.uploadScreenshot(file);
+  return trackSave(() => _adapter.uploadScreenshot(file));
 }
 
 export async function resolveScreenshotUrl(path) {

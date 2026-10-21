@@ -20,6 +20,7 @@
 <link rel="stylesheet" href="css/sniper.css">
 <link rel="stylesheet" href="css/forms.css">
 <link rel="stylesheet" href="css/data-manager.css">
+<link rel="stylesheet" href="css/workspace.css">
 </head>
 <body>
 
@@ -34,13 +35,15 @@
 </div>
 <div class="sun" aria-hidden="true"></div>
 
-<button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Open menu" aria-expanded="false">
+<button class="mobile-menu-btn" id="mobile-menu-btn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="app-sidebar">
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
 </button>
 <div class="sidebar-backdrop" id="sidebar-backdrop" aria-hidden="true"></div>
 
 <div class="app-shell">
   <main class="app-main">
+    <header id="workspace-bar" class="workspace-bar" aria-label="Workspace controls"></header>
+    <div id="connection-banner" class="connection-banner" role="alert" hidden></div>
     <section data-page="dashboard"   class="app-page active"></section>
     <section data-page="accounts"    class="app-page"></section>
     <section data-page="strategies"  class="app-page"></section>

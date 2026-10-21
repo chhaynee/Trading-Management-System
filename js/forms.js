@@ -9,18 +9,22 @@ let titleSeq = 0;
 
 async function closePanel(force = false) {
   if (!activePanel) return;
+  if (activePanel.submitting && !force) return;
   if (!force) {
     const isClean = !activePanel.dirty;
+    if (!isClean) {
     const ok = await confirmDialog({
-      title:        isClean ? 'Close form?'                          : 'Discard changes?',
-      message:      isClean ? 'You can reopen it anytime from the New button.' : 'Your unsaved edits will be lost.',
-      confirmLabel: isClean ? 'Close'                                : 'Discard',
-      cancelLabel:  isClean ? 'Keep open'                            : 'Keep editing',
-      danger:       !isClean,
+      title: activePanel.draftKey ? 'Keep this draft for later?' : 'Discard changes?',
+      message: activePanel.draftKey ? 'Your draft stays in this browser until you save the entry.' : 'Your unsaved edits will be lost.',
+      confirmLabel: activePanel.draftKey ? 'Keep draft & close' : 'Discard',
+      cancelLabel: 'Keep editing',
+      danger: !activePanel.draftKey,
     });
     if (!ok) return;
+    }
   }
   if (!activePanel) return;
+  activePanel.persistDraft?.();
   const { overlay, panel, onKey, releaseFocus, prevOverflow, prevFocus } = activePanel;
   document.removeEventListener('keydown', onKey, true);
   overlay.classList.remove('open');
@@ -50,7 +54,7 @@ function trapFocus(panel) {
   return () => panel.removeEventListener('keydown', onKey);
 }
 
-export function openFormPanel({ title, body, onSubmit, submitLabel = 'Save', onDelete = null, width = 560 }) {
+export function openFormPanel({ title, body, onSubmit, submitLabel = 'Save', onDelete = null, width = 560, draftKey = null }) {
   closePanel(true);
   const titleId = 'form-modal-title-' + (++titleSeq);
 
@@ -76,24 +80,68 @@ export function openFormPanel({ title, body, onSubmit, submitLabel = 'Save', onD
       danger: true,
     });
     if (!ok) return;
-    try { await onDelete(); closePanel(true); } catch(err) { console.error(err); }
+    deleteBtn.disabled = true;
+    submitBtn.disabled = true;
+    if (activePanel) activePanel.submitting = true;
+    try {
+      await onDelete();
+      saved = true;
+      if (draftKey) localStorage.removeItem('tms-draft:' + draftKey);
+      closePanel(true);
+    } catch(err) {
+      errorBox.textContent = err.message || 'Could not delete. Please retry.';
+      errorBox.hidden = false;
+      errorBox.focus();
+    } finally {
+      deleteBtn.disabled = false;
+      submitBtn.disabled = false;
+      if (activePanel) activePanel.submitting = false;
+    }
   });
 
+  const errorBox = el('div', { class: 'form-error', role: 'alert', tabindex: '-1', hidden: true });
+  const draftStatus = el('div', { class: 'draft-status', role: 'status', 'aria-live': 'polite' }, draftKey ? 'Drafts stay in this browser until saved.' : '');
+  let saved = false;
+  let submitting = false;
   const form = el('form', { class: 'form-body', noValidate: true, onSubmit: async (e) => {
     e.preventDefault();
+    if (submitting || !form.reportValidity()) return;
+    if (form.querySelector('.uploading')) {
+      errorBox.textContent = 'Wait for your screenshot upload to finish before saving.';
+      errorBox.hidden = false;
+      return;
+    }
+    if (form.querySelector('.upload-error')) {
+      errorBox.textContent = 'A screenshot upload failed. Choose the image again before saving.';
+      errorBox.hidden = false;
+      return;
+    }
+    submitting = true;
+    if (activePanel?.form === form) activePanel.submitting = true;
+    errorBox.hidden = true;
     submitBtn.disabled = true;
+    if (deleteBtn) deleteBtn.disabled = true;
     submitBtn.classList.add('loading');
     try {
       const r = onSubmit(e.target);
       if (r && r.then) await r;
+      saved = true;
+      if (draftKey) localStorage.removeItem('tms-draft:' + draftKey);
       closePanel(true);
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      errorBox.textContent = err.message || 'Could not save. Your changes are still here; please try again.';
+      errorBox.hidden = false;
+      errorBox.focus();
+    }
     finally {
+      submitting = false;
+      if (activePanel?.form === form) activePanel.submitting = false;
       submitBtn.disabled = false;
+      if (deleteBtn) deleteBtn.disabled = false;
       submitBtn.classList.remove('loading');
     }
   } },
-    body,
+    errorBox, draftKey ? draftStatus : null, body,
   );
 
   const footer = el('footer', { class: 'form-panel-footer' },
@@ -127,14 +175,30 @@ export function openFormPanel({ title, body, onSubmit, submitLabel = 'Save', onD
   document.body.appendChild(overlay);
 
   const releaseFocus = trapFocus(panel);
-  const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); closePanel(); } };
+  const onKey = (e) => {
+    if (document.querySelector('[role="alertdialog"]')) return;
+    if (e.key === 'Escape') { e.preventDefault(); closePanel(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
+  };
   document.addEventListener('keydown', onKey, true);
 
-  activePanel = { overlay, panel, onKey, releaseFocus, prevOverflow, prevFocus, dirty: false };
+  function persistDraft() {
+    if (!draftKey || saved || !activePanel?.dirty) return;
+    try {
+      const values = Object.fromEntries([...new FormData(form)].filter(([, value]) => typeof value === 'string'));
+      localStorage.setItem('tms-draft:' + draftKey, JSON.stringify({ values, savedAt: Date.now() }));
+      draftStatus.textContent = 'Draft saved on this device · ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      draftStatus.textContent = 'Draft could not be stored. Keep this form open until you save.';
+    }
+  }
+  activePanel = { overlay, panel, onKey, releaseFocus, prevOverflow, prevFocus, draftKey, persistDraft, dirty: false };
 
   // Track unsaved changes for the confirm-on-close guard
-  form.addEventListener('input',  () => { if (activePanel) activePanel.dirty = true; });
-  form.addEventListener('change', () => { if (activePanel) activePanel.dirty = true; });
+  const onEdit = () => { if (activePanel?.form === form) { activePanel.dirty = true; persistDraft(); } };
+  activePanel.form = form;
+  form.addEventListener('input', onEdit);
+  form.addEventListener('change', onEdit);
 
   // Animate in + focus first field
   requestAnimationFrame(() => {
@@ -143,6 +207,7 @@ export function openFormPanel({ title, body, onSubmit, submitLabel = 'Save', onD
     const firstInput = panel.querySelector('input:not([type=hidden]), textarea, select, [tabindex]:not([tabindex="-1"])');
     firstInput?.focus();
   });
+  return { form, panel, overlay };
 }
 
 // ── Common form field builders ────────────────────────
@@ -169,7 +234,9 @@ export function textArea({ name, value = '', placeholder = '', rows = 4 }) {
 export function select({ name, value, options, required = false }) {
   const hidden = el('input', { type: 'hidden', name, value: value || '' });
   if (required) hidden.setAttribute('required', 'required');
-  const dropdown = customSelect(options, value, (v) => { hidden.value = v; });
+  const dropdown = customSelect(options, value, (v) => { hidden.value = v; hidden.dispatchEvent(new Event('input', { bubbles: true })); });
+  dropdown.removeAttribute('aria-label');
+  if (required) dropdown.required = true;
   const wrap = el('div', { class: 'form-select-wrap' }, hidden, dropdown);
   return wrap;
 }
@@ -185,6 +252,8 @@ export function multiChips({ options, values = [], name }) {
       if (selected.has(val)) { selected.delete(val); chip.classList.remove('active'); }
       else                   { selected.add(val);    chip.classList.add('active'); }
       hidden.value = Array.from(selected).join(',');
+      chip.setAttribute('aria-pressed', String(selected.has(val)));
+      hidden.dispatchEvent(new Event('input', { bubbles: true }));
     } }, label);
     wrap.appendChild(chip);
   });
@@ -199,6 +268,7 @@ export function colorPicker({ name, value, colors }) {
     const s = el('button', { type: 'button', class: 'color-swatch' + (c === value ? ' active' : ''), style: { background: c }, 'aria-label': c });
     s.addEventListener('click', () => {
       hidden.value = c;
+      hidden.dispatchEvent(new Event('input', { bubbles: true }));
       wrap.querySelectorAll('.color-swatch').forEach(x => x.classList.remove('active'));
       s.classList.add('active');
     });
@@ -238,12 +308,14 @@ export function imageUpload({ name, value = '', onChange }) {
   async function handle(file) {
     if (!file) return;
     const localUrl = URL.createObjectURL(file);
+    preview.classList.remove('upload-error');
     preview.style.backgroundImage = `url(${localUrl})`;
     preview.classList.add('has-image', 'uploading');
     try {
       const { uploadScreenshot, resolveScreenshotUrl } = await import('./db.js');
       const serverPath = await uploadScreenshot(file);
       hidden.value = serverPath;
+      hidden.dispatchEvent(new Event('input', { bubbles: true }));
       // IDB returns `idb://...` (not browser-renderable); resolve to blob URL for preview.
       const displayUrl = serverPath.startsWith('idb://')
         ? await resolveScreenshotUrl(serverPath)
@@ -253,6 +325,7 @@ export function imageUpload({ name, value = '', onChange }) {
     } catch (err) {
       console.error('Upload failed', err);
       preview.classList.add('upload-error');
+      preview.setAttribute('aria-label', 'Screenshot upload failed. Activate to retry.');
     } finally {
       URL.revokeObjectURL(localUrl);
       preview.classList.remove('uploading');
@@ -307,6 +380,7 @@ export function toggleGroup({ name, value, options }) {
     const btn = el('button', { type: 'button', class: 'toggle-btn' + (opt.value === value ? ' active' : '') }, opt.label);
     btn.addEventListener('click', () => {
       hidden.value = opt.value;
+      hidden.dispatchEvent(new Event('input', { bubbles: true }));
       wrap.querySelectorAll('.toggle-btn').forEach(x => x.classList.remove('active'));
       btn.classList.add('active');
     });
