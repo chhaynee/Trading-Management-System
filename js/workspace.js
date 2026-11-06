@@ -2,6 +2,7 @@ import { data, subscribe, setActiveAccount, loadAll } from './store.js';
 import { getMode } from './db.js';
 import { el, accountLabel, confirmDialog } from './utils.js';
 import { storageStatus, subscribeStorageStatus, updateStorageStatus } from './storage-status.js';
+import { canSelectAccount } from './account-model.js';
 
 let accountControl;
 let saveState;
@@ -42,13 +43,15 @@ function renderStatus(status) {
 
 function renderAccounts() {
   if (!accountControl) return;
-  const signature = JSON.stringify(data.accounts.map(a => [a.id, a.name, a.displayName]));
+  const available = data.accounts.filter(canSelectAccount);
+  const signature = JSON.stringify([data.accounts.length === 0, available.map(a => [a.id, a.name, a.displayName])]);
   if (signature !== accountSignature) {
     accountSignature = signature;
-    accountControl.replaceChildren(...(data.accounts.length
-      ? data.accounts.map(a => el('option', { value: a.id }, accountLabel(a)))
-      : [el('option', { value: '' }, 'No accounts yet')]));
+    accountControl.replaceChildren(...(available.length
+      ? available.map(a => el('option', { value: a.id }, accountLabel(a)))
+      : [el('option', { value: '' }, data.accounts.length ? 'No accounts available' : 'No accounts yet')]));
   }
+  accountControl.disabled = !available.length;
   accountControl.value = data.activeAccountId || '';
   summary.textContent = `${data.accounts.length} accounts · ${data.journals.length} trades`;
   summary.title = 'The trading account is the default for new entries. Page filters control which records are displayed.';

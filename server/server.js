@@ -528,24 +528,28 @@ app.delete('/api/:store/:id', (req, res) => {
   const { store, id } = req.params;
   if (!isStore(store)) return res.status(404).json({ error: 'Unknown store' });
 
-  if (store === 'journals') {
-    const row = db.prepare('SELECT screenshot_path, exit_screenshot_path FROM journals WHERE id = ?').get(id);
-    if (row?.screenshot_path) deleteUpload(row.screenshot_path);
-    if (row?.exit_screenshot_path) deleteUpload(row.exit_screenshot_path);
-    // Unlink any plan that referenced this journal
-    db.prepare('UPDATE trade_plans SET journal_id = NULL WHERE journal_id = ?').run(id);
-  }
-
-  if (store === 'trade_plans') {
-    const row = db.prepare('SELECT screenshot_path, journal_id FROM trade_plans WHERE id = ?').get(id);
-    if (row?.screenshot_path) deleteUpload(row.screenshot_path);
-    // Null out the back-link on any journal that pointed at this plan
-    if (row?.journal_id) {
-      db.prepare('UPDATE journals SET plan_id = NULL WHERE id = ?').run(row.journal_id);
+  const screenshots = db.transaction(() => {
+    const candidates = new Set();
+    if (store === 'journals') {
+      const row = db.prepare('SELECT screenshot_path, exit_screenshot_path FROM journals WHERE id = ?').get(id);
+      if (row?.screenshot_path) candidates.add(row.screenshot_path);
+      if (row?.exit_screenshot_path) candidates.add(row.exit_screenshot_path);
+      db.prepare('UPDATE trade_plans SET journal_id = NULL WHERE journal_id = ?').run(id);
     }
-  }
 
-  db.prepare(`DELETE FROM ${store} WHERE id = ?`).run(id);
+    if (store === 'trade_plans') {
+      const row = db.prepare('SELECT screenshot_path FROM trade_plans WHERE id = ?').get(id);
+      if (row?.screenshot_path) candidates.add(row.screenshot_path);
+      // Backlinks can exist even if the plan's journal_id is absent or stale.
+      db.prepare('UPDATE journals SET plan_id = NULL WHERE plan_id = ?').run(id);
+    }
+
+    db.prepare(`DELETE FROM ${store} WHERE id = ?`).run(id);
+    return candidates;
+  })();
+
+  // Only clean files after the delete commits, and retain shared evidence.
+  for (const screenshot of screenshots) deleteUnusedUpload(screenshot);
   res.status(204).end();
 });
 
@@ -556,12 +560,25 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 
 // Stored paths are URLs (`/uploads/<file>`); map them onto UPLOADS_DIR,
 // which may live outside ROOT (e.g. a Docker volume).
-function deleteUpload(relPath) {
+function deleteUnusedUpload(relPath) {
+  const referenced = db.prepare(`
+    SELECT 1 FROM journals WHERE screenshot_path = ? OR exit_screenshot_path = ?
+    UNION ALL
+    SELECT 1 FROM trade_plans WHERE screenshot_path = ?
+    LIMIT 1
+  `).get(relPath, relPath, relPath);
+  if (referenced) return;
+
   const match = /^\/*uploads\/(.+)$/.exec(String(relPath));
   if (!match) return;
   const abs = path.resolve(UPLOADS_DIR, match[1]);
   if (!abs.startsWith(UPLOADS_DIR + path.sep)) return;  // guard against traversal
-  fs.promises.unlink(abs).catch(() => {});
+  // Keep the reference check and unlink in one turn so another write cannot
+  // reference this file while asynchronous cleanup is still pending.
+  try { fs.unlinkSync(abs); }
+  catch (err) {
+    if (err.code !== 'ENOENT') console.warn('[uploads] cleanup:', err.message);
+  }
 }
 
 app.use((err, _req, res, _next) => {

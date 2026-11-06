@@ -8,7 +8,7 @@ import { openFormPanel, field, textInput, numberInput, textArea, select, toggleG
 import { el, INSTRUMENTS, TIMEFRAMES, iconSVG, toast, fmtDate, fmtMoney, customSelect, imageLightbox, accountLabel } from './utils.js';
 import { emptyState } from './accounts.js';
 import { uid } from './db.js';
-import { reviewTrades, signedPnl, signedR, entryTimestamp, localDateValue, dayBoundary, periodRange, balanceAdjustments } from './review-model.js';
+import { reviewTrades, signedPnl, signedR, entryTimestamp, localDateValue, dayBoundary, periodRange, balanceAdjustments, journalAmount } from './review-model.js';
 
 const defaultFilters = () => ({ strategy: 'all', account: 'all', result: 'all', instrument: 'all', search: '', from: '', to: '', period: 'all', sort: 'newest' });
 let filters = defaultFilters();
@@ -405,7 +405,7 @@ export function openJournalForm(existing = null, defaults = {}) {
     { value: 'be',   label: 'Breakeven' }
   ]});
 
-  const amountField = field('Amount ($)', numberInput({ name: 'amount', value: b.amount != null && b.amount !== '' ? Math.abs(Number(b.amount)) : '', step: 'any', min: 0, placeholder: 'e.g. 150' }));
+  const amountField = field('Amount ($)', numberInput({ name: 'amount', value: b.amount != null && b.amount !== '' ? Math.abs(Number(b.amount)) : '', step: 'any', min: 0, placeholder: 'e.g. 150' }), 'Leave blank if unknown; enter 0 for a recorded zero. Breakeven counts as zero in reviews.');
   const rAchievedField = field('R achieved', numberInput({ name: 'rAchieved', value: b.rAchieved != null && b.rAchieved !== '' ? Math.abs(Number(b.rAchieved)) : '', step: 'any', min: 0, placeholder: 'e.g. 2.8' }), 'Enter a positive magnitude. Losses with no R recorded count as −1R in reviews.');
   const amountRow = el('div', { class: 'form-row' }, amountField, rAchievedField);
 
@@ -486,11 +486,10 @@ export function openJournalForm(existing = null, defaults = {}) {
         const entryDate = dayBoundary(raw.entryDate);
         if (entryDate === null) throw new Error('Choose a valid trade date.');
         if (raw.accountId && !accountById(raw.accountId)) throw new Error('Choose an existing account or Unassigned.');
-        if (raw.amount && (!Number.isFinite(Number(raw.amount)) || Number(raw.amount) < 0)) throw new Error('Enter an amount of zero or more.');
         if (raw.rAchieved && (!Number.isFinite(Number(raw.rAchieved)) || Number(raw.rAchieved) < 0)) throw new Error('Enter an R value of zero or more.');
 
         const newResult = raw.result;
-        const newAmount = Math.abs(parseFloat(raw.amount) || 0);
+        const newAmount = journalAmount(raw.amount);
         const newAccountId = raw.accountId || null;
         const newStrategyIds = Array.isArray(raw.strategyIds) ? raw.strategyIds.filter(Boolean) : [];
 

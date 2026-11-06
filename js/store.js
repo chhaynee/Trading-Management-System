@@ -5,6 +5,7 @@
 
 import { db, uid } from './db.js';
 import { updateStorageStatus } from './storage-status.js';
+import { canSelectAccount } from './account-model.js';
 
 export const data = {
   accounts:   [],
@@ -18,6 +19,13 @@ export const data = {
 const listeners = new Set();
 export function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 function notify(type) { listeners.forEach(fn => fn(type)); }
+
+function reconcileActiveAccount(preferredId = data.activeAccountId) {
+  const available = data.accounts.filter(canSelectAccount);
+  data.activeAccountId = available.some(account => account.id === preferredId)
+    ? preferredId : (available[0]?.id || null);
+  localStorage.setItem('tms-active-account', data.activeAccountId || '');
+}
 
 export async function loadAll() {
   // Each collection loads independently — a failure on the new trade_plans/checks
@@ -44,12 +52,13 @@ export async function loadAll() {
   data.plans      = (p || []).sort((x,y) => (y.createdAt||0) - (x.createdAt||0));
   data.checks     = (c || []).sort((x,y) => (x.position||0) - (y.position||0));
   const preferred = localStorage.getItem('tms-active-account');
-  data.activeAccountId = data.accounts.some(account => account.id === preferred) ? preferred : (data.accounts[0]?.id || null);
+  reconcileActiveAccount(preferred);
   notify('all');
   if (failures.length) throw new Error('Some records could not be loaded. Retry your connection; saved data has not been removed.');
 }
 
 export function setActiveAccount(id) {
+  if (id && !data.accounts.some(account => account.id === id && canSelectAccount(account))) return;
   data.activeAccountId = id;
   localStorage.setItem('tms-active-account', id || '');
   notify('active');
@@ -60,7 +69,7 @@ export async function saveAccount(obj) {
   await db.put('accounts', obj);
   const i = data.accounts.findIndex(x => x.id === obj.id);
   if (i >= 0) data.accounts[i] = obj; else data.accounts.unshift(obj);
-  if (!data.activeAccountId) setActiveAccount(obj.id);
+  reconcileActiveAccount();
   notify('accounts');
   return obj;
 }
@@ -69,7 +78,7 @@ export async function deleteAccount(id) {
   data.accounts = data.accounts.filter(x => x.id !== id);
   // Unlink from strategies' implicit usage and from journals
   data.journals.forEach(b => { if (b.accountId === id) b.accountId = null; });
-  if (data.activeAccountId === id) setActiveAccount(data.accounts[0]?.id || null);
+  reconcileActiveAccount();
   notify('accounts');
 }
 

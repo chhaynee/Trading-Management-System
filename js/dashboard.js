@@ -29,10 +29,9 @@ export function renderDashboardPage() {
         ? `Active: ${accountLabel(active)} · ${fmtMoney(active.capital || 0, { dp: 0 })} balance`
         : 'No active account — create one to get started.')
     ),
-    el('div', { class: 'kpi-strip' },
-      kpi(data.accounts.length,   'Accounts'),
-      kpi(data.strategies.length, 'Strategies'),
-      kpi(data.journals.length,  'Journal entries')
+    el('div', { class: 'dashboard-actions' },
+      el('a', { class: 'btn btn-ghost', href: '#performance' }, 'Review performance'),
+      el('button', { class: 'btn btn-primary', onClick: () => openJournalForm() }, 'Log trade')
     )
   ));
   root.appendChild(performanceSummary());

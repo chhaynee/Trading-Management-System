@@ -19,6 +19,7 @@ Built with plain HTML/CSS/JavaScript and an optional tiny local server, packaged
 - **Risk calculator** — quick position-size math
 - **Works offline** — your data is yours, stored locally (SQLite file or browser IndexedDB)
 - **Review trades quickly** — searchable Table/Gallery views, account and date filters, sorting, and clear filtered counts
+- **Compare recorded performance** — the Performance workspace groups outcomes by instrument, strategy, direction, or entry weekday, with account/period filters, cash coverage, average results, and transparent formulas
 - **Safer daily workflows** — visible storage/save status, browser-local trade drafts, account aliases, and complete backups with import previews
 - **Adjust your workspace** — Focus removes background effects; Compact changes density without shrinking phone touch targets
 
@@ -269,10 +270,11 @@ One-off overrides work too: `make up-prod TMS_PORT=8080`.
 | Page | What it's for |
 |------|---------------|
 | **Dashboard** | KPIs, cumulative P&L chart, account strip, doctrine quick links |
-| **Accounts** | All your accounts with drawdown bars, rule chips, attached strategies. Click an account to drill down. |
+| **Accounts** | Clear Active, Paused, Passed, Funded, and Blown indicators with status counts. Search accounts and combine type, company, phase, and strategy filters; sort by date, name, balance, or P&L. Click an account to drill down; use Edit → Account status to record an outcome. Selected marks the workspace default for new entries. |
 | **Strategies** | Define your setups (entry methods, timeframes, instruments, R:R). Click a strategy to see its win rate, recent trades, and which accounts use it. |
 | **Journal** | Gallery of every trade with screenshots. Click any thumbnail for the full detail modal + zoomable lightbox. |
 | **Calendar** | Day-by-day overview of trades |
+| **Performance** | Compare recorded results by instrument, strategy, direction, or entry weekday. Every metric shares the account and period filters. Missing amounts are excluded from cash metrics; sample counts and coverage remain visible. Multi-strategy groups overlap, while the overall summary counts each trade once. |
 | **Sniper Entry** | The Orderflow Sniper Adaptive Flow — a 5-phase pre-trade checklist that grades your setup and tells you what size to take |
 | **Risk Calculator** | Quick position-size / lot calculator |
 | **Data** | Export / import / backup your data, switch storage modes |

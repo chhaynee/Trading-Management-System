@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
+const requireServer = createRequire(new URL('../server/package.json', import.meta.url));
 const time = 1700000000000;
 const bytes = Buffer.from('screenshot fixture');
 const image = 'data:image/png;base64,' + bytes.toString('base64');
@@ -152,7 +153,7 @@ test('replace creates a recoverable SQLite plus complete upload snapshot and kee
     const backups = readdirSync(join(t.dir, 'tms.db.backups'));
     assert.equal(backups.length, 1);
     const backup = join(t.dir, 'tms.db.backups', backups[0]);
-    const Database = require('better-sqlite3');
+    const Database = requireServer('better-sqlite3');
     const recovered = new Database(join(backup, 'tms.db'), { readonly: true });
     try { assert.equal(recovered.prepare('SELECT name FROM accounts WHERE id = ?').get('old').name, 'Recovery account'); }
     finally { recovered.close(); }

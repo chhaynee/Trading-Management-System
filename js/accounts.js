@@ -4,9 +4,31 @@
 
 import { data, saveAccount, deleteAccount, strategyById, setActiveAccount, journalStrategyIds } from './store.js';
 import { openFormPanel, field, textInput, numberInput, select, multiChips, toggleGroup, readForm } from './forms.js';
-import { el, ACCOUNT_TYPES, ACCOUNT_STATUSES, initials, fmtMoney, fmtPct, iconSVG, toast, sparkline, accountLabel, accountIdentity, makeCardAccessible } from './utils.js';
+import { el, ACCOUNT_TYPES, ACCOUNT_STATUSES, initials, fmtMoney, fmtPct, iconSVG, toast, sparkline, accountIdentity } from './utils.js';
+import { accountStatus, accountPnl, accountPhase, ACCOUNT_PHASES, filterAccounts } from './account-model.js';
 import { go } from './router.js';
 import { openJournalForm, openJournalDetail } from './journal.js';
+
+const defaultAccountFilters = () => ({ search: '', status: 'all', type: 'all', company: 'all', phase: 'all', strategy: 'all', sort: 'newest' });
+let accountFilters = defaultAccountFilters();
+let accountFiltersExpanded = null;
+
+function statusIcon(status) {
+  const paths = {
+    all: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    active: '<circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4Z"/>',
+    paused: '<circle cx="12" cy="12" r="9"/><path d="M9 8v8M15 8v8"/>',
+    passed: '<circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/>',
+    funded: '<path d="m12 3 8 4v5c0 4-3 7-8 9-5-2-8-5-8-9V7Z"/><path d="m8 12 3 3 5-6"/>',
+    blown: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/>',
+  };
+  return el('span', { class: 'account-state-icon', 'aria-hidden': 'true', html: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[status] || paths.active}</svg>` });
+}
+
+function accountStatusBadge(account) {
+  const status = accountStatus(account);
+  return el('span', { class: 'account-status-badge', 'data-status': status }, statusIcon(status), ACCOUNT_STATUSES[status].label);
+}
 
 export function renderAccountsPage() {
   const root = document.querySelector('[data-page="accounts"]');
@@ -15,7 +37,7 @@ export function renderAccountsPage() {
     el('div', {},
       el('div', { class: 'page-eyebrow' }, 'Portfolio'),
       el('h1', { class: 'page-title' }, 'Accounts'),
-      el('p', { class: 'page-sub' }, `${data.accounts.length} account${data.accounts.length === 1 ? '' : 's'} — manage rules, risk, and strategy assignments.`)
+      el('p', { class: 'page-sub' }, 'Track your challenges, funded accounts, and every outcome.')
     ),
     el('button', { class: 'btn btn-primary', onClick: () => openAccountForm() },
       el('span', { html: iconSVG('plus') }), ' New account'
@@ -26,9 +48,94 @@ export function renderAccountsPage() {
     root.appendChild(emptyState('No accounts yet', 'Create your first portfolio account to start tracking.', 'Add account', () => openAccountForm()));
     return;
   }
-  const grid = el('div', { class: 'card-grid accounts-grid' });
-  data.accounts.forEach(a => grid.appendChild(accountCard(a)));
-  root.appendChild(grid);
+  const companies = [...new Set(data.accounts.flatMap(a => [a.company, a.broker]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  // An edited/deleted option must never leave a hidden, impossible filter behind.
+  if (accountFilters.company !== 'all' && !companies.includes(accountFilters.company)) accountFilters.company = 'all';
+  if (accountFilters.strategy !== 'all' && !data.strategies.some(s => s.id === accountFilters.strategy)) accountFilters.strategy = 'all';
+
+  const statusButtons = new Map();
+  const summary = el('div', { class: 'account-status-filters', role: 'group', 'aria-label': 'Filter accounts by status' });
+  for (const [value, label] of [['all', 'All accounts'], ...Object.entries(ACCOUNT_STATUSES).map(([key, status]) => [key, status.label])]) {
+    const count = value === 'all' ? data.accounts.length : data.accounts.filter(a => accountStatus(a) === value).length;
+    const button = el('button', { class: 'account-status-filter', 'data-status': value, 'aria-label': `${label}: ${count} account${count === 1 ? '' : 's'}`, 'aria-pressed': String(accountFilters.status === value), onClick: () => {
+      accountFilters.status = value;
+      updateResults();
+    } },
+      el('span', { class: 'account-status-filter-label' }, statusIcon(value), label),
+      el('strong', { class: 'account-status-count' }, count)
+    );
+    statusButtons.set(value, button);
+    summary.appendChild(button);
+  }
+  root.appendChild(summary);
+
+  const resultCount = el('p', { class: 'accounts-result-count', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
+  const results = el('div', { class: 'accounts-results', id: 'accounts-results' });
+  const reset = el('button', { class: 'btn btn-ghost btn-sm', onClick: clearFilters }, 'Reset filters');
+  const selects = new Map();
+  const search = el('input', { type: 'search', name: 'accountSearch', class: 'text-input', value: accountFilters.search,
+    placeholder: 'Name, account number, company…', autocomplete: 'off', onInput: event => {
+      accountFilters.search = event.target.value;
+      updateResults();
+    } });
+  const advancedLabel = el('span', {}, 'More filters');
+  const advanced = el('details', { class: 'accounts-filter-details' },
+    el('summary', {}, el('span', { html: iconSVG('filter') }), advancedLabel),
+    el('div', { class: 'accounts-filter-fields' },
+      filterControl('Account type', 'type', [['all', 'All types'], ...Object.entries(ACCOUNT_TYPES).map(([key, type]) => [key, type.label])]),
+      filterControl('Company / broker', 'company', [['all', 'All companies'], ...companies.map(company => [company, company])]),
+      filterControl('Challenge phase', 'phase', [['all', 'All phases'], ...Object.entries(ACCOUNT_PHASES), ['none', 'No challenge phase']]),
+      filterControl('Strategy', 'strategy', [['all', 'All strategies'], ...data.strategies.map(strategy => [strategy.id, strategy.name])])
+    )
+  );
+  const extraCount = () => ['type', 'company', 'phase', 'strategy'].filter(key => accountFilters[key] !== 'all').length;
+  advanced.open = accountFiltersExpanded ?? (window.matchMedia('(min-width: 769px)').matches || extraCount() > 0);
+  advanced.addEventListener('toggle', () => { accountFiltersExpanded = advanced.open; });
+
+  root.appendChild(el('section', { class: 'accounts-toolbar', 'aria-label': 'Search and filter accounts' },
+    el('div', { class: 'accounts-search-row' },
+      el('label', { class: 'accounts-search-field' }, el('span', {}, 'Search accounts'),
+        el('span', { class: 'accounts-search-input' }, el('span', { html: iconSVG('search'), 'aria-hidden': 'true' }), search)),
+      filterControl('Sort by', 'sort', [['newest', 'Newest first'], ['oldest', 'Oldest first'], ['name', 'Name A–Z'], ['balance-high', 'Highest balance'], ['pnl-high', 'Highest P&L'], ['pnl-low', 'Lowest P&L']])
+    ),
+    advanced
+  ));
+  root.appendChild(el('div', { class: 'accounts-results-head' }, resultCount, reset));
+  root.appendChild(results);
+  updateResults();
+
+  function filterControl(label, key, options) {
+    const control = el('select', { class: 'native-select', name: `account-${key}`, 'aria-label': label, onChange: event => {
+      accountFilters[key] = event.target.value;
+      updateResults();
+    } }, ...options.map(([value, text]) => el('option', { value }, text)));
+    control.value = accountFilters[key];
+    selects.set(key, control);
+    return el('label', { class: 'accounts-filter-field' }, el('span', {}, label), control);
+  }
+
+  function clearFilters() {
+    accountFilters = defaultAccountFilters();
+    search.value = '';
+    selects.forEach((control, key) => { control.value = accountFilters[key]; });
+    updateResults();
+    search.focus({ preventScroll: true });
+  }
+
+  function updateResults() {
+    const matches = filterAccounts(data.accounts, accountFilters, data.strategies);
+    const activeCount = extraCount() + Number(accountFilters.status !== 'all') + Number(Boolean(accountFilters.search.trim()));
+    resultCount.textContent = `Showing ${matches.length} of ${data.accounts.length} accounts`;
+    reset.hidden = !activeCount && accountFilters.sort === 'newest';
+    advancedLabel.textContent = `More filters${extraCount() ? ` (${extraCount()})` : ''}`;
+    statusButtons.forEach((button, status) => button.setAttribute('aria-pressed', String(status === accountFilters.status)));
+    results.replaceChildren();
+    if (!matches.length) {
+      results.appendChild(emptyState('No matching accounts', 'Try another search or reset your filters to see all accounts.', 'Reset filters', clearFilters));
+      return;
+    }
+    results.appendChild(el('div', { class: 'card-grid accounts-grid' }, ...matches.map(accountCard)));
+  }
 }
 
 // Drawdown-used calculation — mirrors dashboard.accountStripCard.
@@ -46,35 +153,35 @@ function computeDDUsed(a) {
 
 function accountCard(a) {
   const type = ACCOUNT_TYPES[a.type] || ACCOUNT_TYPES['own-funds'];
-  const status = ACCOUNT_STATUSES[a.status] || ACCOUNT_STATUSES.active;
+  const status = accountStatus(a);
   const { ddUsed, maxLossDollars } = computeDDUsed(a);
-  const pnl = (a.capital || 0) - (a.startingCapital || 0);
+  const pnl = accountPnl(a);
   const strategies = (a.strategyIds || []).map(strategyById).filter(Boolean);
   const isActive = data.activeAccountId === a.id;
 
-  const card = el('article', { class: 'account-card' + (isActive ? ' is-active' : ''), onClick: (e) => {
-    if (e.target.closest('button')) return;
-    go('accounts/' + a.id);
-  } },
+  const card = el('article', { class: 'account-card account-portfolio-card' + (isActive ? ' is-active' : ''), 'data-status': status },
+    el('div', { class: 'account-card-state' }, accountStatusBadge(a),
+      isActive ? el('span', { class: 'account-selected', title: 'Default account for new trade entries' }, el('span', { html: iconSVG('check') }), 'Selected') : null
+    ),
     el('div', { class: 'account-card-top' },
       el('div', { class: 'account-avatar', style: { background: type.bg, color: type.fg } }, initials(a.company || a.name)),
       el('div', { class: 'account-meta' },
-        el('div', { class: 'account-name', title: a.name }, a.displayName || a.name || 'Untitled'),
-        el('div', { class: 'account-identifier' }, accountIdentity(a))
-      ),
-      el('div', { class: 'account-status', title: status.label },
-        el('span', { class: 'status-dot', style: { background: status.color } }),
-        el('span', { class: 'status-label' }, status.label)
+        el('h2', { class: 'account-name' }, el('a', { class: 'account-name-link', href: '#accounts/' + a.id, title: a.name }, a.displayName || a.name || 'Untitled')),
+        el('div', { class: 'account-identifier' }, accountIdentity({ ...a, phase: null }))
       )
     ),
-    el('div', { class: 'type-badge', style: { background: type.bg, color: type.fg } }, type.label),
+    el('div', { class: 'account-tags' },
+      el('span', { class: 'type-badge account-type-tag', 'data-type': a.type }, type.label),
+      accountPhase(a) ? el('span', { class: 'account-phase-tag' }, ACCOUNT_PHASES[accountPhase(a)] || accountPhase(a)) : null
+    ),
+    el('div', { class: 'account-balance-label' }, 'Current balance'),
     el('div', { class: 'account-balance-row' },
       el('div', { class: 'balance-main' }, fmtMoney(a.capital || 0, { dp: 0 })),
       el('div', { class: 'balance-delta ' + (pnl >= 0 ? 'pos' : 'neg') },
         (pnl >= 0 ? '▲ ' : '▼ ') + fmtMoney(Math.abs(pnl), { dp: 0 })
       )
     ),
-    el('div', { class: 'balance-bar' },
+    el('div', { class: 'balance-bar', role: 'meter', 'aria-label': 'Drawdown limit used', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(ddUsed)), 'aria-valuetext': maxLossDollars ? `${ddUsed.toFixed(0)}% of ${fmtMoney(maxLossDollars, { dp: 0 })} limit` : 'No drawdown limit set' },
       el('div', { class: 'balance-bar-fill', style: { width: ddUsed + '%', background: 'linear-gradient(90deg, var(--gold), var(--red))' } })
     ),
     el('div', { class: 'balance-foot' },
@@ -98,13 +205,13 @@ function accountCard(a) {
         el('span', { html: iconSVG('edit') }), ' Edit'
       ),
       isActive
-        ? el('span', { class: 'active-pill' }, 'Active')
-        : (a.status === 'passed' || a.status === 'blown')
+        ? el('span', { class: 'account-review-link', 'aria-hidden': 'true' }, 'View account', el('span', { html: iconSVG('chevron') }))
+        : (status === 'passed' || status === 'blown')
           ? null
-          : el('button', { class: 'btn btn-ghost btn-sm', onClick: () => { setActiveAccount(a.id); toast(`${a.name} set as active`); } }, 'Set active')
+          : el('button', { class: 'btn btn-ghost btn-sm', title: 'Use as the default account for new entries', onClick: () => { setActiveAccount(a.id); toast(`${a.name} selected`); } }, 'Use account')
     )
   );
-  return makeCardAccessible(card, () => go('accounts/' + a.id));
+  return card;
 }
 
 export function openAccountForm(existing = null) {
@@ -212,7 +319,7 @@ export function openAccountForm(existing = null) {
       field('Starting capital', numberInput({ name: 'startingCapital', value: a.startingCapital ?? '', placeholder: 'USD', step: '1', required: true })),
       field('Current balance',  numberInput({ name: 'capital',         value: a.capital         ?? '', placeholder: 'USD', step: '0.01' }))
     ),
-    field('Status', toggleGroup({ name: 'status', value: a.status || 'active', options: statusOpts })),
+    field('Account status', toggleGroup({ name: 'status', value: a.status || 'active', options: statusOpts }), 'Choose the current state. Passed and Blown accounts stay available for review.'),
     typeSpecific,
     sectionHeader('Attached strategies'),
     strategyOptions.length
@@ -268,7 +375,6 @@ export function renderAccountDetail(id) {
   const a = data.accounts.find(x => x.id === id);
   if (!a) { go('accounts'); return; }
   const type = ACCOUNT_TYPES[a.type] || ACCOUNT_TYPES['own-funds'];
-  const status = ACCOUNT_STATUSES[a.status] || ACCOUNT_STATUSES.active;
   const strategies = (a.strategyIds || []).map(strategyById).filter(Boolean);
   const trades = data.journals.filter(b => b.accountId === a.id);
   const wins = trades.filter(t => t.result === 'win').length;
@@ -303,10 +409,7 @@ export function renderAccountDetail(id) {
       ),
       el('div', { class: 'chip-row', style: { marginTop: '10px' } },
         el('span', { class: 'mini-chip', style: { background: type.bg, color: type.fg, borderColor: type.fg + '55' } }, type.label),
-        el('span', { class: 'mini-chip' },
-          el('span', { class: 'status-dot', style: { background: status.color, display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginRight: '6px' } }),
-          status.label
-        ),
+        accountStatusBadge(a),
         a.company ? el('span', { class: 'mini-chip' }, a.company) : null,
         a.accountNumber ? el('span', { class: 'mini-chip' }, '#' + a.accountNumber) : null
       )
@@ -316,12 +419,12 @@ export function renderAccountDetail(id) {
         el('span', { html: iconSVG('edit') }), ' Edit'
       ),
       isActive
-        ? el('button', { class: 'btn btn-active', type: 'button', disabled: true, title: 'This is your active account' },
-            el('span', { html: iconSVG('check') }), ' Active'
+        ? el('button', { class: 'btn btn-active', type: 'button', disabled: true, title: 'Default account for new trade entries' },
+            el('span', { html: iconSVG('check') }), ' Selected'
           )
         : (a.status === 'passed' || a.status === 'blown')
           ? null
-          : el('button', { class: 'btn btn-ghost', onClick: () => { setActiveAccount(a.id); toast(`${a.name} set as active`); } }, 'Set active'),
+          : el('button', { class: 'btn btn-ghost', onClick: () => { setActiveAccount(a.id); toast(`${a.name} selected`); } }, 'Use account'),
       el('button', { class: 'btn btn-primary', onClick: () => openJournalForm(null, { accountId: a.id }) },
         el('span', { html: iconSVG('plus') }), ' Add trade'
       )

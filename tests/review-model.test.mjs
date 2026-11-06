@@ -1,6 +1,39 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayBoundary, entryTimestamp, localDateValue, periodRange, reviewTrades, signedPnl, signedR, reviewMetrics, balanceAdjustments } from '../js/review-model.js';
+import { dayBoundary, entryTimestamp, localDateValue, periodRange, reviewTrades, signedPnl, signedR, reviewMetrics, balanceAdjustments, journalAmount } from '../js/review-model.js';
+import { performanceSummary } from '../js/performance-model.js';
+
+test('journal amount keeps an optional blank unknown and an explicit zero measured', () => {
+  for (const value of ['', '  ', null, undefined]) assert.equal(journalAmount(value), null);
+  for (const value of ['0', '0.00', 0, -0]) assert.equal(journalAmount(value), 0);
+  assert.equal(journalAmount(' 125.50 '), 125.5);
+  assert.equal(journalAmount('.25'), 0.25);
+  assert.equal(journalAmount('1e2'), 100);
+});
+
+test('journal amount rejects negative, malformed and nonnumeric input', () => {
+  for (const value of [-1, '-5.50', '50 dollars', '1,000', '0x10', '0b11', 'Infinity', '1e999', Infinity, NaN, true, false, [], [10], {}]) {
+    assert.throws(() => journalAmount(value), /Enter an amount of zero or more/, `Reject ${String(value)}`);
+  }
+});
+
+test('new journal amounts preserve performance coverage through serialization', () => {
+  const journals = [
+    { result: 'win', amount: journalAmount('') },
+    { result: 'loss', amount: journalAmount('  ') },
+    { result: 'win', amount: journalAmount('0') },
+    { result: 'win', amount: journalAmount('120') },
+    { result: 'be', amount: journalAmount('') },
+  ];
+  const summary = performanceSummary(JSON.parse(JSON.stringify(journals)));
+  assert.equal(summary.total, 5);
+  assert.equal(summary.measuredCount, 3);
+  assert.equal(summary.missingAmounts, 2);
+  assert.equal(summary.pnl, 120);
+  assert.equal(summary.expectancy, 40);
+  assert.equal(signedPnl(journals[0]), 0);
+  assert.equal(signedPnl(journals[1]), -0);
+});
 
 test('P&L uses the result sign and never treats account capital as profit', () => {
   assert.equal(signedPnl({ result: 'loss', amount: -125 }), -125);

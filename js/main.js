@@ -16,6 +16,7 @@ import { renderAccountsPage, renderAccountDetail, openAccountForm } from './acco
 import { renderStrategiesPage, renderStrategyDetail, openStrategyForm } from './strategies.js';
 import { renderJournalPage, openJournalForm } from './journal.js';
 import { renderCalendarPage } from './calendar.js';
+import { renderPerformancePage } from './performance.js';
 import { renderDoctrineChecklistPage } from './doctrine.js';
 import { renderSniperPage } from './sniper.js';
 import { el, fmtMoney, fmtPct, ACCOUNT_TYPES, initials, accountLabel } from './utils.js';
@@ -34,6 +35,7 @@ register('accounts',    (param) => param ? renderAccountDetail(param) : renderAc
 register('strategies',  (param) => param ? renderStrategyDetail(param) : renderStrategiesPage());
 register('journal',     renderJournalPage);
 register('calendar',    renderCalendarPage);
+register('performance', renderPerformancePage);
 register('sniper',      renderSniperPage);
 register('doctrine',    (param) => {
   if (param === 'checklist') renderDoctrineChecklistPage();
@@ -76,7 +78,8 @@ function updateAddButton() {
   const route = current() || { name: 'dashboard' };
   const label = document.getElementById('sidebar-add-label');
   const map = {
-    dashboard: 'Quick Add',
+    dashboard: 'Log trade',
+    performance: 'Log trade',
     accounts:  'Add Account',
     strategies:'Add Strategy',
     journal:   'Add Journal',
@@ -114,10 +117,11 @@ function onAddClick() {
   switch (route.name) {
     case 'accounts':    openAccountForm();   break;
     case 'strategies':  openStrategyForm();  break;
-    case 'journal':     openJournalForm();   break;
+    case 'journal':
+    case 'dashboard':
+    case 'performance': openJournalForm();   break;
     case 'calendar':    openJournalForm();   break;
     case 'calculator':
-    case 'dashboard':
     default:            openAccountForm();   break;
   }
 }
@@ -235,6 +239,7 @@ async function boot() {
       strategies: () => r.param ? renderStrategyDetail(r.param) : renderStrategiesPage(),
       journal:   renderJournalPage,
       calendar:  renderCalendarPage,
+      performance: renderPerformancePage,
       calculator: renderCalcMeta,
       doctrine:  () => r.param === 'checklist' ? renderDoctrineChecklistPage() : null,
     };

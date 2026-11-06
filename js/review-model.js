@@ -34,6 +34,23 @@ export function periodRange(period, now = Date.now()) {
   return { from: localDateValue(start), to: localDateValue(today) };
 }
 
+/** Preserve an optional unknown amount while validating explicit cash values. */
+export function journalAmount(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return null;
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) {
+      throw new Error('Enter an amount of zero or more.');
+    }
+    value = Number(text);
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error('Enter an amount of zero or more.');
+  }
+  return value === 0 ? 0 : value;
+}
+
 export function signedPnl(trade) {
   const parsed = parseFloat(trade.amount);
   const amount = Number.isFinite(parsed) ? Math.abs(parsed) : 0;
